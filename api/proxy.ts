@@ -393,8 +393,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Check if we should bypass system prompt injection for supperapi.store
         const shouldBypassSystemPrompt = apiBase.includes('supperapi.store');
 
+        console.log('[PROXY] System prompt check:', {
+            apiBase,
+            shouldBypass: shouldBypassSystemPrompt,
+            hasSystemPrompt: !!systemPrompt
+        });
+
         if (shouldBypassSystemPrompt) {
-            console.log('[PROXY] Bypassing system prompt injection for supperapi.store URL:', apiBase);
+            console.log('[PROXY] ✅ Bypassing system prompt injection for supperapi.store URL:', apiBase);
         }
 
         if (systemPrompt && !shouldBypassSystemPrompt) {
