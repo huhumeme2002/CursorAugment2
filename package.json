@@ -1,0 +1,44 @@
+{
+  "name": "vercel-ai-proxy",
+  "version": "1.0.0",
+  "description": "Vercel serverless AI proxy with Redis key management",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "dev:server": "ts-node server.ts",
+    "build": "echo 'Vercel handles TypeScript automatically'",
+    "start": "ts-node server.ts",
+    "deploy": "vercel --prod",
+    "key:create": "node -r dotenv/config scripts/create-key.js",
+    "key:list": "node -r dotenv/config scripts/list-keys.js",
+    "key:delete": "node -r dotenv/config scripts/delete-key.js"
+  },
+  "keywords": [
+    "vercel",
+    "serverless",
+    "ai",
+    "proxy",
+    "redis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@upstash/redis": "^1.28.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.2",
+    "lru-cache": "^10.1.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/node": "^20.11.0",
+    "@vercel/node": "^3.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0",
+    "vercel": "^33.0.0"
+  }
+}
