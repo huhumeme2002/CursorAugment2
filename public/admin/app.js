@@ -1399,7 +1399,7 @@ let currentAnnouncement = null;
 // Load current announcement
 async function loadAnnouncement() {
     try {
-        const response = await fetch(`${API_BASE}/admin/announcement`, {
+        const response = await fetch(`${API_BASE}/admin/announcement/get`, {
             headers: { 'Authorization': `Bearer ${authToken}` }
         });
 

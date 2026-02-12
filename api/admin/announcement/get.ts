@@ -22,15 +22,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(401).json({ error: 'Invalid token' });
         }
 
-        // Get all announcements
+        // Get all announcements (admin needs to see all, not just active)
         const announcements = await getAnnouncements();
-
-        // Return the first active announcement, or null if none exists
-        const activeAnnouncement = announcements.find(a => a.is_active) || null;
 
         return res.status(200).json({
             success: true,
-            announcement: activeAnnouncement
+            announcements
         });
     } catch (error) {
         console.error('Error getting announcement:', error);
