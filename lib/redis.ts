@@ -454,6 +454,11 @@ export async function saveSettings(
             models: existing?.models || {}
         };
         await redis.set(SETTINGS_KEY, settings);
+
+        // Invalidate caches so changes are visible immediately
+        clearSettingsCache();
+        modelConfigsCache.delete('model_configs');
+
         return true;
     } catch (error) {
         console.error('Error saving settings to Redis:', error);
@@ -556,6 +561,11 @@ export async function saveModelConfig(modelId: string, config: ModelConfig): Pro
         settings.models = models;
 
         await redis.set(SETTINGS_KEY, settings);
+
+        // Invalidate caches so changes are visible immediately
+        modelConfigsCache.delete('model_configs');
+        clearSettingsCache();
+
         return true;
     } catch (error) {
         console.error('Error saving model config:', error);
@@ -575,6 +585,11 @@ export async function deleteModelConfig(modelId: string): Promise<boolean> {
 
         delete settings.models[modelId];
         await redis.set(SETTINGS_KEY, settings);
+
+        // Invalidate caches so changes are visible immediately
+        modelConfigsCache.delete('model_configs');
+        clearSettingsCache();
+
         return true;
     } catch (error) {
         console.error('Error deleting model config:', error);
@@ -628,6 +643,10 @@ export async function getBackupProfiles(): Promise<BackupProfile[]> {
 export async function saveBackupProfiles(profiles: BackupProfile[]): Promise<boolean> {
     try {
         await redis.set(BACKUP_PROFILES_KEY, profiles);
+
+        // Invalidate cache so changes are visible immediately
+        backupProfilesCache.delete('backup_profiles');
+
         return true;
     } catch (error) {
         console.error('Error saving Backup profiles:', error);
@@ -788,6 +807,10 @@ export async function saveAPIProfile(profile: APIProfile): Promise<boolean> {
         const profiles = await getAPIProfiles();
         profiles[profile.id] = profile;
         await redis.set(API_PROFILES_KEY, profiles);
+
+        // Invalidate cache so changes are visible immediately
+        apiProfilesCache.clear();
+
         return true;
     } catch (error) {
         console.error('Error saving API profile:', error);
@@ -807,6 +830,10 @@ export async function deleteAPIProfile(profileId: string): Promise<boolean> {
 
         delete profiles[profileId];
         await redis.set(API_PROFILES_KEY, profiles);
+
+        // Invalidate cache so changes are visible immediately
+        apiProfilesCache.clear();
+
         return true;
     } catch (error) {
         console.error('Error deleting API profile:', error);
