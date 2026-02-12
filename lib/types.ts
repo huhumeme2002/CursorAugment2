@@ -39,6 +39,7 @@ export interface APIProfile {
     speed: "fast" | "medium" | "slow";
     description?: string;
     is_active: boolean;     // Whether this profile is available for selection
+    disable_system_prompt_injection?: boolean; // If true, skip system prompt injection for this profile
 }
 
 // Model configuration for per-model system prompts

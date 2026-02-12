@@ -213,6 +213,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             apiKey: string;
             modelActual?: string;
             name: string;
+            disableSystemPromptInjection?: boolean;
         } | null = null;
 
         let concurrencyIdToDecrement: string | null = null;
@@ -231,7 +232,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     apiBase: profile.api_url,
                     apiKey: profile.api_key,
                     modelActual: profile.model_actual,
-                    name: `Profile: ${profile.name}`
+                    name: `Profile: ${profile.name}`,
+                    disableSystemPromptInjection: profile.disable_system_prompt_injection
                 };
                 console.log(`[PROXY] Using User Selected Profile: ${profile.name}`);
             } else {
@@ -391,16 +393,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Check if we should bypass system prompt injection for supperapi.store
-        const shouldBypassSystemPrompt = apiBase.includes('supperapi.store');
+        const shouldBypassSystemPrompt = apiBase.includes('supperapi.store') || activeSource.disableSystemPromptInjection;
 
         console.log('[PROXY] System prompt check:', {
             apiBase,
             shouldBypass: shouldBypassSystemPrompt,
-            hasSystemPrompt: !!systemPrompt
+            hasSystemPrompt: !!systemPrompt,
+            profileDisabled: activeSource.disableSystemPromptInjection,
+            supperapiBypass: apiBase.includes('supperapi.store')
         });
 
         if (shouldBypassSystemPrompt) {
-            console.log('[PROXY] ✅ Bypassing system prompt injection for supperapi.store URL:', apiBase);
+            console.log('[PROXY] ✅ Bypassing system prompt injection (Reason:',
+                apiBase.includes('supperapi.store') ? 'supperapi.store URL' : 'profile configuration', ')');
         }
 
         if (systemPrompt && !shouldBypassSystemPrompt) {

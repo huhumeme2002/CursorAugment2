@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **CursorAugment2** is a TypeScript-based AI API proxy that routes requests to multiple backends (Claude, GPT, Gemini, etc.) with Redis-based key management, rate limiting, and an admin dashboard. It provides an OpenAI-compatible API interface while managing multiple API profiles, user sessions, and per-key quotas.
 
+**IMPORTANT: Stateless Architecture**
+- The proxy is **completely stateless** - it does NOT store conversation history
+- Clients must send the full messages array in each request (standard OpenAI-compatible behavior)
+- Redis only stores: API keys, settings, profiles, metrics, and announcements
+- No conversation state, chat history, or message storage exists in the proxy
+
 **Dual Deployment Modes:**
 - **Vercel Serverless**: Serverless functions auto-generated from `api/` directory (production default)
 - **Express Standalone**: Full Express server with dynamic routing via `server.ts` (local dev, PM2 production)
@@ -17,14 +23,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 npm install
 
-# Run local development server (Express)
+# Run local development server (Express) - recommended for local dev
 npm run dev:server
 
-# Run with Vercel dev environment
+# Run with Vercel dev environment (simulates serverless)
 npm run dev
 
 # TypeScript type checking
 npx tsc --noEmit
+
+# Test proxy endpoint locally
+curl -X POST http://localhost:3000/api/v1/chat/completions \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Claude-Opus-4.5-VIP","messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
 ### API Key Management (CLI)
@@ -96,6 +108,8 @@ The server uses a dynamic routing system in `server.ts` (Express mode only) that
 - `/api/v1/chat/completions` → `./api/v1/chat/completions.ts`
 - Each route file must export a default async function: `export default async (req, res) => { ... }`
 - In Vercel mode, routes are automatically mapped by the platform's file-based routing
+- Security: Directory traversal protection prevents accessing files outside `api/` directory
+- File resolution: Checks for exact match, then `.ts`, then `.js` extension
 
 ### Authentication Layers
 1. **Admin Authentication**: JWT-based (24h expiry)
@@ -148,7 +162,7 @@ The server uses a dynamic routing system in `server.ts` (Express mode only) that
 ```
 Keys:
 - api_key:{key_id} → RedisKeyData
-- session:{session_id} → Session
+- session:{session_id} → Session (interface defined but not actively used)
 - model_config:{model_name} → ModelConfig
 - settings → Global configuration
 - api_profile:{profile_id} → APIProfile
@@ -156,6 +170,12 @@ Keys:
 - concurrency:{profile_id} → Number (current concurrent requests)
 - announcement:{announcement_id} → Announcement
 - metrics:* → Performance metrics (aggregated periodically)
+
+NOT stored (stateless design):
+- conversation:* - No conversation history
+- chat_history:* - No message storage
+- messages:* - No chat state
+- thread:* - No thread tracking
 ```
 
 **Schema Auto-Migration**: The `getKeyData()` function in `lib/redis.ts` automatically migrates legacy key formats (activation-based, IP-based, concurrent-user-based) to the current daily limit schema. Migration happens transparently on first access.
@@ -218,16 +238,22 @@ All endpoints are dynamically loaded by `server.ts`. Key endpoints:
 
 Required variables (see `.env.example`):
 ```bash
-API_KEY_GOC=              # Primary backend API key
-UPSTASH_REDIS_REST_URL=   # Redis REST URL
-UPSTASH_REDIS_REST_TOKEN= # Redis REST token
-ADMIN_PASSWORD=           # Admin panel password
-JWT_SECRET=               # 32-char hex for JWT signing
+API_KEY_GOC=              # Primary backend API key (NewCLI or other AI API key)
+UPSTASH_REDIS_REST_URL=   # Redis REST URL (from Upstash dashboard)
+UPSTASH_REDIS_REST_TOKEN= # Redis REST token (from Upstash dashboard)
+ADMIN_PASSWORD=           # Admin panel password (choose a strong password)
+JWT_SECRET=               # 32-char hex for JWT signing (generate using command below)
 ```
 
 Generate JWT_SECRET:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Optional variables:
+```bash
+PORT=3000                 # Server port (default: 3000)
+NODE_ENV=production       # Environment mode
 ```
 
 ## Important Implementation Details
@@ -238,29 +264,38 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - Supports both `.ts` and `.js` files
 - Returns 404 if route file doesn't exist or has no default export
 - In Vercel mode, routes are statically analyzed at build time
+- Special case: `/api/proxy` is handled directly by importing `api/proxy.ts`
 
 ### Streaming Support
 - Native Node.js streaming for AI responses
 - 5-minute server timeout to handle long generations (Express mode)
 - 10MB payload limit for requests/responses
+- **Heartbeat mechanism**: Sends SSE comments every 15 seconds during streaming to prevent nginx/proxy timeouts during long AI thinking periods
 - HTTP Keep-Alive connection pooling in `api/proxy.ts` reduces SSL handshake overhead (~100ms → ~0ms)
   - Reuses TCP connections via `httpsAgent` with `keepAlive: true`
   - Maintains up to 50 concurrent connections per host
   - Keeps 10 idle connections ready for instant reuse
+- Stream cleanup: Concurrency counters are decremented when stream completes, errors, or client disconnects
 
 ### Rate Limiting & Concurrency Management
 - Per-day quotas stored in `RedisKeyData.usage_today`
 - Session-based concurrent user tracking with automatic cleanup
+- **Smart Usage Counting**: Only counts actual user messages, not tool results or assistant messages
+  - Checks if last message has `role: "user"` and content is not a `tool_result`
+  - Prevents double-counting during multi-turn tool use conversations
 - **Waterfall Fallback System**: When primary profile hits concurrency limit, automatically cascades to backup profiles
   - Backup profiles defined in `backup_profile:{id}` with `concurrency_limit` field
   - Concurrency tracked via Redis counters: `concurrency:{profile_id}`
-  - Incremented on request start, decremented on completion/error
+  - Incremented on request start, decremented on completion/error/disconnect
   - Admin endpoints: `/api/admin/concurrency-status`, `/api/admin/reset-concurrency`
+- **User Profile Selection**: Users can select a specific API profile, which bypasses waterfall logic
 
 ### Model Transformation
 - Client sends model name (e.g., "Claude-Opus-4.5-VIP")
 - Proxy transforms to actual backend model name via `APIProfile.model_actual`
-- Supports custom system prompts per model via `model_config:{model_name}`
+- Supports custom system prompts per model via `model_config:{model_name}` (max 10K characters)
+- **System Prompt Bypass**: Automatically skips system prompt injection for `supperapi.store` URLs or when `APIProfile.disable_system_prompt_injection` is true, to prevent conflicts with backend-managed prompts
+- **Messages Array Passthrough**: The proxy forwards the entire messages array unchanged from client to backend (no filtering, truncation, or modification except system prompt injection)
 - Proxy version is tracked in `api/proxy.ts` via `PROXY_VERSION` constant for deployment verification
 
 ### URL Building Logic
@@ -305,6 +340,7 @@ export default async (req, res) => {
 };
 ```
 3. Server automatically routes `/api/admin/{feature}/{action}` to your file
+4. No need to modify `server.ts` - dynamic routing handles it
 
 ### Adding a New Backend Profile Type
 1. Update `APIProfile` interface in `lib/types.ts`
@@ -322,20 +358,27 @@ export default async (req, res) => {
 2. Search logs for correlation ID to trace entire request lifecycle
 3. Use `/api/debug-key` endpoint to inspect key data without authentication (dev only)
 4. Monitor concurrency status via `/api/admin/concurrency-status`
+5. Check Redis directly using Upstash console for data verification
 
 ## Testing
 
 The codebase doesn't include automated tests. Manual testing workflow:
 1. Start local server: `npm run dev:server`
 2. Test admin login: `POST http://localhost:3000/api/admin/login`
-3. Create test API key via admin panel or CLI
+3. Create test API key via admin panel or CLI: `npm run key:create`
 4. Test proxy endpoint: `POST http://localhost:3000/api/v1/chat/completions`
 5. Monitor logs for errors and correlation IDs
 6. Check concurrency tracking: `GET http://localhost:3000/api/admin/concurrency-status`
 
-**Debug Scripts**:
+**Debug Scripts** (in root directory):
 - `debug-key.js`: Direct Redis key inspection (requires env vars)
 - `debug-key-via-api.js`: Test key validation via API endpoint
+
+**Testing Tips**:
+- Use correlation IDs (`X-Correlation-ID` header) to trace requests through logs
+- Test streaming with `"stream": true` in request body
+- Test tool use scenarios to verify usage counting only counts user messages
+- Test waterfall fallback by setting low concurrency limits on default profile
 
 ## Troubleshooting
 
@@ -353,6 +396,7 @@ If concurrency counters don't decrement properly (e.g., due to crashed requests)
 1. Check current status: `GET /api/admin/concurrency-status`
 2. Reset counters: `POST /api/admin/reset-concurrency`
 3. Monitor logs for correlation IDs of stuck requests
+4. Common causes: Server crashes during streaming, client disconnects not handled, network timeouts
 
 ### TypeScript Compilation Errors
 Check `tsc_output.txt` and `tsc_output_2.txt` for previous compilation issues.
@@ -362,3 +406,20 @@ Check `tsc_output.txt` and `tsc_output_2.txt` for previous compilation issues.
 2. Monitor Redis latency via Upstash dashboard
 3. Review metrics endpoint: `GET /api/admin/metrics`
 4. Verify Keep-Alive connections are being reused (check proxy logs)
+
+### Common Errors
+- **"Invalid API key"**: Key not found in Redis - verify key exists using `npm run key:list`
+- **"Daily limit reached"**: User exceeded quota - check usage via admin panel
+- **"Service Unavailable"**: No API sources configured - verify `API_KEY_GOC` env var and settings
+- **"Request timeout"**: Backend took >5 minutes - check backend API status
+- **Stream disconnects**: Check heartbeat logs, verify nginx timeout settings (should be >60s)
+
+### Context Memory Issues
+If users report "poor context memory" or "AI forgets previous messages":
+- **This is NOT a proxy bug** - the proxy is stateless by design and forwards all messages unchanged
+- Root causes are typically:
+  1. Client application not sending full conversation history (most common)
+  2. Backend API context handling issues
+  3. System prompt too long (reduces available context window)
+- Debug by logging `requestBody.messages.length` in `api/proxy.ts` to verify client is sending full history
+- The proxy does NOT truncate, filter, or store conversation history
