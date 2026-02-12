@@ -1399,11 +1399,24 @@ let allAnnouncements = [];
 
 // Load all announcements
 async function loadAnnouncement() {
+    console.log('[Announcement] loadAnnouncement() called');
+    const statusBadge = document.getElementById('announcementStatusBadge');
+    const content = document.getElementById('announcementDisplay');
+
+    // Show loading state
+    if (statusBadge) statusBadge.textContent = 'Đang tải...';
+    if (content) content.innerHTML = '<div class="text-center py-8 text-gray-400"><i class="fas fa-spinner fa-spin text-2xl"></i><p class="mt-2">Đang tải thông báo...</p></div>';
+
     try {
-        const response = await fetch(`${API_BASE}/admin/announcement/get?_t=${Date.now()}`, {
+        const url = `${API_BASE}/admin/announcement/get?_t=${Date.now()}`;
+        console.log('[Announcement] Fetching:', url);
+
+        const response = await fetch(url, {
             headers: { 'Authorization': `Bearer ${authToken}` },
             cache: 'no-store'
         });
+
+        console.log('[Announcement] Response status:', response.status);
 
         if (response.status === 401) {
             logout();
@@ -1411,14 +1424,13 @@ async function loadAnnouncement() {
         }
 
         const data = await response.json();
-        console.log('[Announcement] API response:', data);
+        console.log('[Announcement] Data received:', JSON.stringify(data).substring(0, 200));
 
         if (data.announcements && data.announcements.length > 0) {
             allAnnouncements = data.announcements;
             currentAnnouncement = data.announcements[0];
             displayAnnouncementList(data.announcements);
         } else if (data.announcement) {
-            // Backward compatibility: old API format
             allAnnouncements = [data.announcement];
             currentAnnouncement = data.announcement;
             displayAnnouncementList([data.announcement]);
@@ -1428,7 +1440,7 @@ async function loadAnnouncement() {
             displayNoAnnouncement();
         }
     } catch (error) {
-        console.error('Load announcement error:', error);
+        console.error('[Announcement] Load error:', error);
         displayNoAnnouncement();
     }
 }

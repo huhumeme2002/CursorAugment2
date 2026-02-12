@@ -17,8 +17,16 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Serve static files from public directory
-app.use(express.static('public'));
+// Serve static files from public directory (no cache for JS files)
+app.use(express.static('public', {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.js') || filePath.endsWith('.css')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        }
+    }
+}));
 
 // Serve admin index.html for /admin route
 app.get('/admin', (req, res) => {
