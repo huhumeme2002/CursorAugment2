@@ -1395,12 +1395,14 @@ window.deleteAPIProfile = async function (id) {
 // =====================
 
 let currentAnnouncement = null;
+let allAnnouncements = [];
 
-// Load current announcement
+// Load all announcements
 async function loadAnnouncement() {
     try {
-        const response = await fetch(`${API_BASE}/admin/announcement/get`, {
-            headers: { 'Authorization': `Bearer ${authToken}` }
+        const response = await fetch(`${API_BASE}/admin/announcement/get?_t=${Date.now()}`, {
+            headers: { 'Authorization': `Bearer ${authToken}` },
+            cache: 'no-store'
         });
 
         if (response.status === 401) {
@@ -1409,11 +1411,19 @@ async function loadAnnouncement() {
         }
 
         const data = await response.json();
+        console.log('[Announcement] API response:', data);
 
         if (data.announcements && data.announcements.length > 0) {
+            allAnnouncements = data.announcements;
             currentAnnouncement = data.announcements[0];
-            displayAnnouncement(data.announcements[0]);
+            displayAnnouncementList(data.announcements);
+        } else if (data.announcement) {
+            // Backward compatibility: old API format
+            allAnnouncements = [data.announcement];
+            currentAnnouncement = data.announcement;
+            displayAnnouncementList([data.announcement]);
         } else {
+            allAnnouncements = [];
             currentAnnouncement = null;
             displayNoAnnouncement();
         }
@@ -1423,30 +1433,41 @@ async function loadAnnouncement() {
     }
 }
 
-// Display announcement in UI
-function displayAnnouncement(announcement) {
+// Display list of all announcements
+function displayAnnouncementList(announcements) {
     const statusBadge = document.getElementById('announcementStatusBadge');
     const content = document.getElementById('announcementDisplay');
     const actions = document.getElementById('announcementActions');
 
-    if (announcement.is_active) {
-        statusBadge.className = 'px-3 py-1 bg-green-100 text-green-600 rounded-full text-xs font-semibold';
-        statusBadge.textContent = 'Đang hoạt động';
-    } else {
-        statusBadge.className = 'px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-semibold';
-        statusBadge.textContent = 'Tạm dừng';
-    }
+    const activeCount = announcements.filter(a => a.is_active).length;
+    statusBadge.className = 'px-3 py-1 bg-green-100 text-green-600 rounded-full text-xs font-semibold';
+    statusBadge.textContent = `${activeCount} đang hoạt động / ${announcements.length} tổng`;
 
-    content.innerHTML = `
-        <div class="text-left">
-            <h4 class="text-lg font-bold text-gray-800 mb-2">${announcement.title}</h4>
-            <p class="text-gray-600 whitespace-pre-wrap">${announcement.content}</p>
-            ${announcement.start_time ? `<p class="text-xs text-gray-500 mt-3"><i class="fas fa-clock mr-1"></i>Bắt đầu: ${formatDateTime(announcement.start_time)}</p>` : ''}
-            ${announcement.end_time ? `<p class="text-xs text-gray-500"><i class="fas fa-clock mr-1"></i>Kết thúc: ${formatDateTime(announcement.end_time)}</p>` : ''}
+    content.innerHTML = announcements.map(a => `
+        <div class="text-left p-4 mb-3 rounded-lg border ${a.is_active ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-gray-50'}">
+            <div class="flex justify-between items-start mb-2">
+                <h4 class="text-base font-bold text-gray-800">${a.title}</h4>
+                <div class="flex items-center space-x-2">
+                    <span class="px-2 py-0.5 rounded-full text-xs font-medium ${a.is_active ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-500'}">
+                        ${a.is_active ? 'Hoạt động' : 'Tạm dừng'}
+                    </span>
+                    <button onclick="editAnnouncement('${a.id}')" class="text-blue-500 hover:text-blue-700 text-sm" title="Chỉnh sửa">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button onclick="deleteSingleAnnouncement('${a.id}')" class="text-red-500 hover:text-red-700 text-sm" title="Xóa">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+            <p class="text-gray-600 text-sm whitespace-pre-wrap">${a.content}</p>
+            <div class="mt-2 text-xs text-gray-400">
+                ${a.start_time ? `<span class="mr-3"><i class="fas fa-clock mr-1"></i>Bắt đầu: ${formatDateTime(a.start_time)}</span>` : ''}
+                ${a.end_time ? `<span><i class="fas fa-clock mr-1"></i>Kết thúc: ${formatDateTime(a.end_time)}</span>` : ''}
+            </div>
         </div>
-    `;
+    `).join('');
 
-    actions.classList.remove('hidden');
+    actions.classList.add('hidden');
 }
 
 // Display no announcement state
@@ -1481,6 +1502,15 @@ function formatDateTime(dateString) {
     });
 }
 
+// Edit a specific announcement by ID
+window.editAnnouncement = function (id) {
+    const announcement = allAnnouncements.find(a => a.id === id);
+    if (announcement) {
+        currentAnnouncement = announcement;
+        openAnnouncementModal(true);
+    }
+}
+
 // Open announcement modal
 window.openAnnouncementModal = function (isEdit = false) {
     const modal = document.getElementById('announcementModal');
@@ -1505,6 +1535,7 @@ window.openAnnouncementModal = function (isEdit = false) {
             document.getElementById('announcementEndTime').value = formatDateTimeForInput(currentAnnouncement.end_time);
         }
     } else {
+        currentAnnouncement = null;
         title.textContent = 'Tạo Thông báo';
         document.getElementById('announcementTitle').value = '';
         document.getElementById('announcementContent').value = '';
@@ -1560,6 +1591,7 @@ window.saveAnnouncement = async function () {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
+                id: currentAnnouncement ? currentAnnouncement.id : undefined,
                 title,
                 content,
                 type: 'info',
@@ -1590,8 +1622,8 @@ window.saveAnnouncement = async function () {
     }
 }
 
-// Delete announcement
-window.deleteAnnouncement = async function () {
+// Delete a specific announcement by ID
+window.deleteSingleAnnouncement = async function (id) {
     if (!confirm('Bạn có chắc chắn muốn xóa thông báo này?')) {
         return;
     }
@@ -1600,12 +1632,13 @@ window.deleteAnnouncement = async function () {
         const response = await fetch(`${API_BASE}/admin/announcement/delete`, {
             method: 'DELETE',
             headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ id })
         });
 
         if (response.ok) {
-            alert('Đã xóa thông báo thành công');
             loadAnnouncement();
         } else {
             const data = await response.json();
@@ -1615,5 +1648,14 @@ window.deleteAnnouncement = async function () {
         console.error('Delete announcement error:', error);
         alert('Lỗi kết nối server');
     }
+}
+
+// Delete announcement (legacy - uses currentAnnouncement)
+window.deleteAnnouncement = async function () {
+    if (!currentAnnouncement) {
+        alert('Không có thông báo để xóa');
+        return;
+    }
+    deleteSingleAnnouncement(currentAnnouncement.id);
 }
 

@@ -25,6 +25,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Get all announcements (admin needs to see all, not just active)
         const announcements = await getAnnouncements();
 
+        // Prevent caching
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+
         return res.status(200).json({
             success: true,
             announcements
