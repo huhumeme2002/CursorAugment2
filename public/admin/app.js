@@ -857,10 +857,14 @@ window.switchTab = function (tabName) {
             }
         }
     } else if (tabName === 'announcements') {
+        console.log('[SwitchTab] announcements tab clicked, announcementsContent:', !!announcementsContent);
         if (announcementsContent) {
             announcementsContent.classList.remove('hidden');
             if (announcementsTab) announcementsTab.className = 'px-4 py-2 rounded-lg bg-purple-100 text-purple-700 font-medium transition';
+            console.log('[SwitchTab] calling loadAnnouncement()');
             loadAnnouncement();
+        } else {
+            console.error('[SwitchTab] announcementsContent element NOT FOUND!');
         }
     }
 }
