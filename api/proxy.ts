@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Agent as HttpsAgent } from 'https';
-import { getKeyData, isExpired, getSettings, incrementUsage, getAPIProfile, getBackupProfiles, incrementConcurrency, decrementConcurrency, validateKeyWithUsage } from '../lib/redis';
+import { getKeyData, isExpired, getSettings, incrementUsage, checkUsageLimit, getAPIProfile, getBackupProfiles, incrementConcurrency, decrementConcurrency, validateKeyWithUsage } from '../lib/redis';
 import { generateCorrelationId, setCorrelationId, logInfo, logError, createPerformanceTracker } from '../lib/logger';
 import { metrics } from '../lib/metrics';
 
@@ -122,11 +122,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // ====================
         const requestBody = req.body;
 
-        // Check if this request contains a new user message
-        // Tool results and assistant messages should NOT be counted
-        let hasNewUserMessage = false;
+        // ====================
+        // 3. SMART USAGE COUNTING - DEFERRED
+        // ====================
+        // Determine if this request should count against quota
+        // Usage will be incremented AFTER successful response (not before)
 
-        if (requestBody.messages && Array.isArray(requestBody.messages)) {
+        // Skip count_tokens endpoint (metadata only)
+        const isCountTokensEndpoint = clientPath.includes('/count_tokens');
+
+        let shouldCountUsage = false;
+        if (!isCountTokensEndpoint && requestBody.messages && Array.isArray(requestBody.messages)) {
             const lastMessage = requestBody.messages[requestBody.messages.length - 1];
 
             // Check if it's actually a user message (not tool_result)
@@ -138,57 +144,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 // Content can be string (actual user message) or array of content blocks
                 if (typeof content === 'string') {
                     // Simple string content = real user message
-                    hasNewUserMessage = true;
+                    shouldCountUsage = true;
                 } else if (Array.isArray(content)) {
                     // Check if any block is a tool_result
                     const hasToolResult = content.some(
                         (block: any) => block.type === 'tool_result'
                     );
                     // Only count if there's NO tool_result in content
-                    hasNewUserMessage = !hasToolResult;
+                    shouldCountUsage = !hasToolResult;
                 } else {
                     // Single object content - check type
-                    hasNewUserMessage = content?.type !== 'tool_result';
+                    shouldCountUsage = content?.type !== 'tool_result';
                 }
             }
         }
 
-        console.log('[PROXY] Message check:', {
+        console.log('[PROXY] Usage counting check:', {
+            endpoint: clientPath,
+            isCountTokens: isCountTokensEndpoint,
             hasMessages: !!requestBody.messages,
             messageCount: requestBody.messages?.length || 0,
             lastRole: requestBody.messages?.[requestBody.messages?.length - 1]?.role || 'none',
             lastContentType: typeof requestBody.messages?.[requestBody.messages?.length - 1]?.content,
-            willCount: hasNewUserMessage
+            shouldCountUsage: shouldCountUsage
         });
 
-        // Only increment usage for actual user prompts
-        let usageResult = { allowed: true, currentUsage: 0, limit: keyData.daily_limit };
-
-        if (hasNewUserMessage) {
-            usageResult = await incrementUsage(userToken);
-
-            if (!usageResult.allowed) {
-                console.error('[PROXY] BLOCKING REQUEST - Daily limit reached:', {
-                    userToken: userToken.substring(0, 8) + '...',
-                    clientIP,
-                    usage: usageResult.currentUsage,
-                    limit: usageResult.limit
-                });
-                return res.status(429).json({
-                    error: 'Daily limit reached',
-                    message: `This key has reached its daily limit of ${usageResult.limit} requests. Please try again tomorrow.`,
-                    current_usage: usageResult.currentUsage,
-                    daily_limit: usageResult.limit
-                });
-            }
-
-            console.log('[PROXY] Usage incremented:', {
+        // Check current usage (but don't increment yet)
+        const currentUsageCheck = await checkUsageLimit(userToken);
+        if (!currentUsageCheck.allowed) {
+            console.error('[PROXY] BLOCKING REQUEST - Daily limit reached:', {
                 userToken: userToken.substring(0, 8) + '...',
-                usage: usageResult.currentUsage,
-                limit: usageResult.limit
+                clientIP,
+                usage: currentUsageCheck.currentUsage,
+                limit: currentUsageCheck.limit
             });
-        } else {
-            console.log('[PROXY] Skipping usage count (not a user message)');
+            return res.status(429).json({
+                error: 'Daily limit reached',
+                message: `This key has reached its daily limit of ${currentUsageCheck.limit} requests. Please try again tomorrow.`,
+                current_usage: currentUsageCheck.currentUsage,
+                daily_limit: currentUsageCheck.limit
+            });
         }
 
         // ====================
@@ -494,12 +489,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             res.write(':connected\n\n');
 
             // Helper to ensure we only decrement once
+            let usageIncremented = false;
             const safeDecrement = async (reason: string) => {
                 if (concurrencyIdToDecrement) {
                     console.log(`[PROXY] Releasing concurrency for ${concurrencyIdToDecrement} (Reason: ${reason})`);
                     const id = concurrencyIdToDecrement;
                     concurrencyIdToDecrement = null; // Prevent double decrement
                     await decrementConcurrency(id);
+                }
+            };
+
+            // Helper to increment usage once on success
+            const safeIncrementUsage = async () => {
+                if (shouldCountUsage && !usageIncremented) {
+                    usageIncremented = true;
+                    const usageResult = await incrementUsage(userToken);
+                    console.log('[PROXY] Usage incremented after successful response:', {
+                        userToken: userToken.substring(0, 8) + '...',
+                        usage: usageResult.currentUsage,
+                        limit: usageResult.limit
+                    });
                 }
             };
 
@@ -552,6 +561,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         clearInterval(heartbeatInterval);
                         await safeDecrement('Stream complete');
 
+                        // Increment usage after successful stream
+                        await safeIncrementUsage();
+
                         // Track successful streaming request
                         const duration = Date.now() - requestStart;
                         metrics.recordRequest(req.url || '/unknown', true, duration);
@@ -581,6 +593,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const data = await response.json();
             // Decrement immediately after getting full response
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
+
+            // Increment usage after successful non-stream response
+            if (shouldCountUsage) {
+                const usageResult = await incrementUsage(userToken);
+                console.log('[PROXY] Usage incremented after successful response:', {
+                    userToken: userToken.substring(0, 8) + '...',
+                    usage: usageResult.currentUsage,
+                    limit: usageResult.limit
+                });
+            }
 
             // Track successful non-streaming request
             const duration = Date.now() - requestStart;

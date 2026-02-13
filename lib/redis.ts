@@ -313,6 +313,41 @@ export async function incrementUsage(keyName: string): Promise<{
 }
 
 /**
+ * Check usage without incrementing (for pre-validation)
+ * @param keyName - The API key to check
+ * @returns Usage check result
+ */
+export async function checkUsageLimit(keyName: string): Promise<{
+    allowed: boolean;
+    currentUsage: number;
+    limit: number;
+    reason?: string;
+}> {
+    try {
+        const data = await getKeyData(keyName);
+        if (!data) return { allowed: false, currentUsage: 0, limit: 0, reason: 'invalid_key' };
+
+        if (data.usage_today.count >= data.daily_limit) {
+            return {
+                allowed: false,
+                currentUsage: data.usage_today.count,
+                limit: data.daily_limit,
+                reason: 'daily_limit_reached'
+            };
+        }
+
+        return {
+            allowed: true,
+            currentUsage: data.usage_today.count,
+            limit: data.daily_limit
+        };
+    } catch (error) {
+        console.error('Error checking usage limit:', error);
+        return { allowed: false, currentUsage: 0, limit: 0, reason: 'server_error' };
+    }
+}
+
+/**
  * Delete a key from Redis
  * @param keyName - The name of the key to delete
  * @returns true if successful, false otherwise
