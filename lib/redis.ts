@@ -300,8 +300,8 @@ export async function incrementUsage(keyName: string, conversationId?: string): 
         }
 
         const now = Date.now();
-        const CONVERSATION_TURN_WINDOW_MS = 180000; // 180 seconds (3 minutes) - requests within this window are same turn
-        // Increased to 3 minutes to handle Claude Opus prompts that take 60-120 seconds with multiple internal requests
+        const CONVERSATION_TURN_WINDOW_MS = 100000; // 100 seconds - requests within this window are same turn
+        // Balanced window: long enough for complex Claude Opus prompts (usually < 90s), short enough to detect new prompts
 
         // Check if this is part of the same conversation turn
         let shouldIncrement = true;
