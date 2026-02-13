@@ -67,11 +67,11 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
 - **Conversation Turn-Based Usage Counting** (CRITICAL - Updated 2026-02-13):
   - **Problem**: Claude Code makes 5-10 API calls per user prompt (tool use, parallel calls), causing usage to increment 5-10x
-  - **Solution**: Groups requests from same client within 120-second window as one conversation turn
+  - **Solution**: Groups requests from same client within 60-second window as one conversation turn
   - **Implementation**:
     - Conversation ID = `${clientIP}:${userAgent}` (client fingerprint)
-    - Requests within 120s window with same conversation ID = same turn (only first increments usage)
-    - Window increased from 30s to 120s to handle complex Claude Code prompts that take 30-90 seconds
+    - Requests within 60s window with same conversation ID = same turn (only first increments usage)
+    - Window set to 60s to balance: long enough for complex prompts (30-50s), short enough to detect new prompts
     - Usage incremented AFTER successful response (not before validation)
     - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
     - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
@@ -92,11 +92,11 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Conversation Turn Tracking**:
   - `last_request_timestamp`: Unix timestamp (ms) of last request
   - `last_conversation_id`: Client fingerprint for grouping requests into conversation turns
-  - 120-second window: Requests within this window with same conversation ID are treated as one turn
+  - 60-second window: Requests within this window with same conversation ID are treated as one turn
 - **Usage Functions**:
   - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
   - `incrementUsage(keyName, conversationId?)`: Increment usage counter (call ONLY after successful response)
-    - If `conversationId` provided and matches previous request within 120s, skips increment
+    - If `conversationId` provided and matches previous request within 60s, skips increment
     - Returns `{ allowed, currentUsage, limit, shouldIncrement, reason? }`
 
 ### Redis Key Schema
@@ -208,8 +208,8 @@ When modifying usage counting logic:
 1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
 2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
 3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
-4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 120s window
-5. **Understand the time window** - 120 seconds is the window for grouping requests as one conversation turn (increased from 30s to handle complex Claude Code prompts)
+4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 60s window
+5. **Understand the time window** - 60 seconds is the window for grouping requests as one conversation turn (balanced to handle complex prompts while detecting new prompts)
 6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls
 7. **Monitor logs** - Check for `[USAGE] Skipping increment - same conversation turn` messages to verify turn detection works
 
