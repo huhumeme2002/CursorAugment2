@@ -204,6 +204,7 @@ Manual testing only:
 - **Nginx setup**: See `NGINX_CONFIGURATION.md`
 - **Cache issues**: See `SETTINGS_CACHE.md`
 - **Usage counting issues**: See `USAGE_COUNTING_FIX.md` for the 2026-02-13 fix that resolved 1 prompt being counted as 5 requests
+- **Debugging usage counting**: Check logs for `[PROXY] Usage counting check` and `[PROXY] Content structure debug`. If `shouldCountUsage` is always `false`, the tool_result detection logic may be failing. Last message content structure varies by client (Claude Opus, Cursor, etc.)
 - **Stuck concurrency counters**: `GET /api/admin/concurrency-status`, then `POST /api/admin/reset-concurrency`. Usually caused by server crashes during streaming
 - **"Context memory" complaints**: Not a proxy bug — proxy is stateless and forwards all messages unchanged. Client is likely not sending full history. Debug by logging `requestBody.messages.length` in `api/proxy.ts`
 - **TypeScript errors**: Check `tsc_output.txt` and `tsc_output_2.txt` for previous issues. Note: `tsconfig.json` only includes `api/**/*` and `lib/**/*` — `server.ts` is excluded from type checking
