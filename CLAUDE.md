@@ -67,10 +67,11 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
 - **Conversation Turn-Based Usage Counting** (CRITICAL - Updated 2026-02-13):
   - **Problem**: Claude Code makes 5-10 API calls per user prompt (tool use, parallel calls), causing usage to increment 5-10x
-  - **Solution**: Groups requests from same client within 30-second window as one conversation turn
+  - **Solution**: Groups requests from same client within 120-second window as one conversation turn
   - **Implementation**:
     - Conversation ID = `${clientIP}:${userAgent}` (client fingerprint)
-    - Requests within 30s window with same conversation ID = same turn (only first increments usage)
+    - Requests within 120s window with same conversation ID = same turn (only first increments usage)
+    - Window increased from 30s to 120s to handle complex Claude Code prompts that take 30-90 seconds
     - Usage incremented AFTER successful response (not before validation)
     - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
     - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
@@ -91,11 +92,11 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Conversation Turn Tracking**:
   - `last_request_timestamp`: Unix timestamp (ms) of last request
   - `last_conversation_id`: Client fingerprint for grouping requests into conversation turns
-  - 30-second window: Requests within this window with same conversation ID are treated as one turn
+  - 120-second window: Requests within this window with same conversation ID are treated as one turn
 - **Usage Functions**:
   - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
   - `incrementUsage(keyName, conversationId?)`: Increment usage counter (call ONLY after successful response)
-    - If `conversationId` provided and matches previous request within 30s, skips increment
+    - If `conversationId` provided and matches previous request within 120s, skips increment
     - Returns `{ allowed, currentUsage, limit, shouldIncrement, reason? }`
 
 ### Redis Key Schema
@@ -115,6 +116,7 @@ metrics:*                  → Performance metrics
 - `APIProfile`: Backend config with `api_key`, `api_url`, `model_actual`, `capabilities`, `is_active`, `disable_system_prompt_injection`
 - `BackupProfile`: Extends APIProfile concept with `concurrency_limit` for waterfall system
 - `Announcement`: System notifications with `type` (info/warning/error/success), `priority`, time-based activation
+- `ModelConfig`: Per-model configuration with `system_prompt` (max 10K chars), stored as `model_config:{model_name}` in Redis
 
 ### Utility Libraries
 - `lib/auth.ts`: `generateToken()`, `verifyToken()`, `verifyAdminPassword()`
@@ -135,7 +137,34 @@ JWT_SECRET=               # 32-char hex: node -e "console.log(require('crypto').
 
 Optional: `PORT` (default 3000), `NODE_ENV`
 
-## Adding a New Admin Endpoint
+## Admin Panel Features
+
+### Key Management (`public/admin/`)
+The admin panel provides a web UI for managing API keys:
+- **Create keys**: Set expiry date and daily usage limit
+- **List keys**: View all keys with usage stats and status
+- **Delete keys**: Remove keys from Redis
+- **Reset quota**: Reset `usage_today` to 0 for a key (POST `/api/admin/keys/reset-quota`)
+- **Add quota**: Increase `daily_limit` by specified amount (POST `/api/admin/keys/add-quota`)
+
+### Quota Management Endpoints
+Both endpoints accept `name` or `keyName` parameter for compatibility:
+
+**Reset Quota:**
+```typescript
+POST /api/admin/keys/reset-quota
+Body: { name: "key_name" }  // or { keyName: "key_name" }
+Response: { success: true, data: { keyName, daily_limit, current_usage: 0, usage_date } }
+```
+
+**Add Quota:**
+```typescript
+POST /api/admin/keys/add-quota
+Body: { name: "key_name", amount: 100 }  // or { keyName: "key_name", amount: 100 }
+Response: { success: true, data: { keyName, old_daily_limit, new_daily_limit, amount_added, current_usage } }
+```
+
+### Adding a New Admin Endpoint
 
 Create `api/admin/{feature}/{action}.ts` — no changes to `server.ts` needed:
 ```typescript
@@ -149,6 +178,8 @@ export default async (req, res) => {
     // Your logic here
 };
 ```
+
+**Important**: When adding endpoints that modify key data, accept both `name` and `keyName` parameters for frontend compatibility.
 
 ## Testing
 
@@ -169,6 +200,7 @@ Manual testing only:
 - **Stuck concurrency counters**: `GET /api/admin/concurrency-status`, then `POST /api/admin/reset-concurrency`. Usually caused by server crashes during streaming
 - **"Context memory" complaints**: Not a proxy bug — proxy is stateless and forwards all messages unchanged. Client is likely not sending full history. Debug by logging `requestBody.messages.length` in `api/proxy.ts`
 - **TypeScript errors**: Check `tsc_output.txt` and `tsc_output_2.txt` for previous issues. Note: `tsconfig.json` only includes `api/**/*` and `lib/**/*` — `server.ts` is excluded from type checking
+- **400 Bad Request on admin endpoints**: If frontend sends `name` but backend expects `keyName` (or vice versa), ensure endpoints accept both parameters for compatibility
 
 ## Critical Implementation Rules
 
@@ -176,7 +208,13 @@ When modifying usage counting logic:
 1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
 2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
 3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
-4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 30s window
-5. **Understand the time window** - 30 seconds is the window for grouping requests as one conversation turn
+4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 120s window
+5. **Understand the time window** - 120 seconds is the window for grouping requests as one conversation turn (increased from 30s to handle complex Claude Code prompts)
 6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls
 7. **Monitor logs** - Check for `[USAGE] Skipping increment - same conversation turn` messages to verify turn detection works
+
+When adding admin endpoints:
+1. **Accept both parameter names** - For key operations, accept both `name` and `keyName` from request body for frontend compatibility
+2. **Verify admin token** - Always call `verifyToken()` and check `decoded.admin` before processing
+3. **Return consistent responses** - Use `{ success: true, message: "...", data: {...} }` format for success, `{ error: "..." }` for errors
+4. **Clear caches when needed** - Call appropriate cache clear functions after modifying profiles, settings, or model configs
