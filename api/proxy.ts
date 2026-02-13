@@ -154,7 +154,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     typeValue: content?.type,
                     contentPreview: typeof content === 'string' ? content.substring(0, 100) :
                                   Array.isArray(content) ? `array[${content.length}]` :
-                                  typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other'
+                                  typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other',
+                    // NEW: Check array items
+                    arrayItemTypes: Array.isArray(content) ? content.map((item: any) => item?.type || 'no-type') : 'N/A',
+                    firstItemPreview: Array.isArray(content) && content[0] ? JSON.stringify(content[0]).substring(0, 150) : 'N/A'
                 });
 
                 // Check if content is a tool_result
