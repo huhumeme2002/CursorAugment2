@@ -300,8 +300,8 @@ export async function incrementUsage(keyName: string, conversationId?: string): 
         }
 
         const now = Date.now();
-        const CONVERSATION_TURN_WINDOW_MS = 100000; // 100 seconds - requests within this window are same turn
-        // Balanced window: long enough for complex Claude Opus prompts (usually < 90s), short enough to detect new prompts
+        const CONVERSATION_TURN_WINDOW_MS = 60000; // 60 seconds - requests within this window are same turn
+        // Balanced window: groups tool calls for same prompt while detecting new user prompts
 
         // Check if this is part of the same conversation turn
         let shouldIncrement = true;
