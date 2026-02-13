@@ -100,12 +100,22 @@ async function main() {
     console.log('\n🔄 === CẬP NHẬT QUOTA TỪ 100 LÊN 150 ===\n');
 
     try {
-        // Lấy tất cả keys
-        const keysResponse = await redisRequest('keys', ['api_key:*']);
-        const keys = keysResponse.result || [];
+        // Lấy tất cả keys (UUID format, không có prefix)
+        const keysResponse = await redisRequest('keys', ['*']);
+        let keys = keysResponse.result || [];
 
         if (keys.length === 0) {
-            console.log('⚠️  Không có API key nào trong database.\n');
+            console.log('⚠️  Không có key nào trong database.\n');
+            return;
+        }
+
+        // Lọc chỉ lấy keys có format UUID (bỏ qua các keys khác như settings, profiles, etc.)
+        keys = keys.filter(key => {
+            return /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(key);
+        });
+
+        if (keys.length === 0) {
+            console.log('⚠️  Không có API key nào (UUID format) trong database.\n');
             return;
         }
 
@@ -118,7 +128,17 @@ async function main() {
         for (const key of keys) {
             try {
                 const dataResponse = await redisRequest('get', [key]);
-                const data = dataResponse.result;
+                let data = dataResponse.result;
+
+                // Parse JSON nếu data là string
+                if (typeof data === 'string') {
+                    try {
+                        data = JSON.parse(data);
+                    } catch (e) {
+                        console.log(`⏭️  Bỏ qua ${key} (không parse được JSON)\n`);
+                        continue;
+                    }
+                }
 
                 if (!data || typeof data !== 'object') {
                     console.log(`⏭️  Bỏ qua ${key} (không đúng format)\n`);
@@ -130,8 +150,8 @@ async function main() {
                     // Cập nhật daily_limit lên 150
                     data.daily_limit = 150;
 
-                    // Lưu lại vào Redis
-                    await redisSet(key, data);
+                    // Lưu lại vào Redis (phải stringify vì Redis lưu dạng string)
+                    await redisSet(key, JSON.stringify(data));
 
                     updatedCount++;
                     updatedKeys.push(key);
