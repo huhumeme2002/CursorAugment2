@@ -300,7 +300,7 @@ export async function incrementUsage(keyName: string, conversationId?: string): 
         }
 
         const now = Date.now();
-        const CONVERSATION_TURN_WINDOW_MS = 30000; // 30 seconds - requests within this window are same turn
+        const CONVERSATION_TURN_WINDOW_MS = 120000; // 120 seconds (2 minutes) - requests within this window are same turn
 
         // Check if this is part of the same conversation turn
         let shouldIncrement = true;
