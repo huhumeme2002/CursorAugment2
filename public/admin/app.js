@@ -174,6 +174,12 @@ function renderKeysTable(keys) {
           <button onclick="copyKey('${key.name}')" class="text-blue-500 hover:text-blue-700 mr-3" title="Copy Key">
             <i class="fas fa-copy"></i>
           </button>
+          <button onclick="openAddQuotaModal('${key.name}', ${key.daily_limit})" class="text-green-500 hover:text-green-700 mr-3" title="Thêm Quota">
+            <i class="fas fa-plus-circle"></i>
+          </button>
+          <button onclick="resetQuota('${key.name}')" class="text-orange-500 hover:text-orange-700 mr-3" title="Reset Quota">
+            <i class="fas fa-redo"></i>
+          </button>
           <button onclick="deleteKey('${key.name}')" class="text-red-500 hover:text-red-700" title="X├│a">
             <i class="fas fa-trash"></i>
           </button>
@@ -1673,5 +1679,119 @@ window.deleteAnnouncement = async function () {
         return;
     }
     deleteSingleAnnouncement(currentAnnouncement.id);
+}
+
+// =====================
+// QUOTA MANAGEMENT
+// =====================
+
+// Reset Quota for a key
+async function resetQuota(keyName) {
+    if (!confirm(`Bạn có chắc chắn muốn reset quota về 0 cho key "${keyName}"?\n\nThao tác này sẽ đặt lại usage_today về 0.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/admin/keys/reset-quota`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: keyName })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            alert(`✅ Đã reset quota thành công cho key: ${keyName}`);
+            loadKeys();
+        } else {
+            alert(`❌ Lỗi: ${data.error || 'Không thể reset quota'}`);
+        }
+    } catch (error) {
+        console.error('Reset quota error:', error);
+        alert('❌ Lỗi kết nối server');
+    }
+}
+
+// Open Add Quota Modal
+let currentKeyForQuota = null;
+let currentDailyLimit = 0;
+
+window.openAddQuotaModal = function(keyName, dailyLimit) {
+    currentKeyForQuota = keyName;
+    currentDailyLimit = dailyLimit;
+
+    const modal = document.getElementById('addQuotaModal');
+    const keyNameDisplay = document.getElementById('quotaKeyName');
+    const currentLimitDisplay = document.getElementById('quotaCurrentLimit');
+    const amountInput = document.getElementById('quotaAmount');
+    const errorDiv = document.getElementById('addQuotaError');
+
+    keyNameDisplay.textContent = keyName;
+    currentLimitDisplay.textContent = dailyLimit;
+    amountInput.value = '';
+    errorDiv.classList.add('hidden');
+
+    modal.classList.remove('hidden');
+}
+
+// Close Add Quota Modal
+window.closeAddQuotaModal = function() {
+    document.getElementById('addQuotaModal').classList.add('hidden');
+    currentKeyForQuota = null;
+    currentDailyLimit = 0;
+}
+
+// Submit Add Quota
+window.submitAddQuota = async function() {
+    const amountInput = document.getElementById('quotaAmount');
+    const amount = parseInt(amountInput.value);
+    const errorDiv = document.getElementById('addQuotaError');
+
+    errorDiv.classList.add('hidden');
+
+    if (!amount || amount <= 0) {
+        errorDiv.textContent = 'Vui lòng nhập số lượng quota hợp lệ (> 0)';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+
+    if (amount > 10000) {
+        errorDiv.textContent = 'Số lượng quota không được vượt quá 10,000';
+        errorDiv.classList.remove('hidden');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/admin/keys/add-quota`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                name: currentKeyForQuota,
+                amount: amount
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            const newLimit = data.new_daily_limit || (currentDailyLimit + amount);
+            alert(`✅ Đã thêm ${amount} quota thành công!\n\nKey: ${currentKeyForQuota}\nGiới hạn mới: ${newLimit} lượt/ngày`);
+            closeAddQuotaModal();
+            loadKeys();
+        } else {
+            errorDiv.textContent = data.error || 'Không thể thêm quota';
+            errorDiv.classList.remove('hidden');
+        }
+    } catch (error) {
+        console.error('Add quota error:', error);
+        errorDiv.textContent = 'Lỗi kết nối server';
+        errorDiv.classList.remove('hidden');
+    }
 }
 

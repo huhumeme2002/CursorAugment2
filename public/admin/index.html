@@ -943,6 +943,52 @@
     </div>
   </div>
 
+  <!-- Add Quota Modal -->
+  <div id="addQuotaModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-white rounded-2xl p-8 w-full max-w-md slide-down">
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-2xl font-bold text-gray-800">Thêm Quota</h2>
+        <button onclick="closeAddQuotaModal()" class="text-gray-400 hover:text-gray-600">
+          <i class="fas fa-times text-2xl"></i>
+        </button>
+      </div>
+
+      <div class="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-gray-600">Key:</span>
+          <span id="quotaKeyName" class="text-sm font-bold text-gray-800"></span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-medium text-gray-600">Giới hạn hiện tại:</span>
+          <span id="quotaCurrentLimit" class="text-sm font-bold text-blue-600"></span>
+        </div>
+      </div>
+
+      <div class="mb-6">
+        <label class="block text-sm font-medium text-gray-700 mb-2">Số lượng quota muốn thêm</label>
+        <input type="number" id="quotaAmount" min="1" max="10000"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none"
+          placeholder="Ví dụ: 100">
+        <p class="text-xs text-gray-500 mt-2">
+          <i class="fas fa-info-circle mr-1"></i>Quota sẽ được cộng thêm vào giới hạn hiện tại
+        </p>
+      </div>
+
+      <div id="addQuotaError" class="hidden text-red-500 text-sm bg-red-50 p-3 rounded-lg mb-4"></div>
+
+      <div class="flex space-x-4">
+        <button onclick="closeAddQuotaModal()"
+          class="flex-1 bg-gray-200 text-gray-700 py-3 rounded-lg font-semibold hover:bg-gray-300 transition">
+          Hủy
+        </button>
+        <button onclick="submitAddQuota()"
+          class="flex-1 bg-green-500 hover:bg-green-600 text-white py-3 rounded-lg font-semibold transition">
+          <i class="fas fa-plus mr-2"></i>Thêm Quota
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script src="/admin/app.js"></script>
   <script src="/admin/metrics.js"></script>
 </body>
