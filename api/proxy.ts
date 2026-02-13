@@ -95,8 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Log client info for debugging
         console.log('[PROXY] Client info:', {
             ip: clientIP,
-            userAgent: userAgent.substring(0, 50) + '...',
-            conversationId: conversationId.substring(0, 50) + '...'
+            userAgent: userAgent.substring(0, 50) + '...'
         });
 
         // ====================
