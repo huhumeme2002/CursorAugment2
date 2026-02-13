@@ -59,6 +59,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     setCorrelationId(correlationId);
     res.setHeader('X-Correlation-ID', correlationId);
 
+    // Extract conversation ID for turn-based usage counting
+    // Strategy: Use a combination of user-agent + client-ip as conversation identifier
+    // This allows grouping requests from the same client within a time window
+    const userAgent = req.headers['user-agent'] || 'unknown';
+    const forwarded = req.headers['x-forwarded-for'];
+    const realIp = req.headers['x-real-ip'];
+    const clientIP = forwarded
+        ? (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0])
+        : (realIp ? (Array.isArray(realIp) ? realIp[0] : realIp) : 'unknown-ip');
+
+    // Create a stable conversation ID from client fingerprint
+    // This groups all requests from same client within 30s window as one turn
+    const conversationId = `${clientIP}:${userAgent.substring(0, 50)}`;
+
     const perfTracker = createPerformanceTracker('Proxy Request');
     const requestStart = Date.now();
 
@@ -83,14 +97,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
         // Log client info for debugging
-        const forwarded = req.headers['x-forwarded-for'];
-        const realIp = req.headers['x-real-ip'];
-        const clientIP = forwarded
-            ? (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0])
-            : (realIp ? (Array.isArray(realIp) ? realIp[0] : realIp) : 'unknown-ip');
         console.log('[PROXY] Client info:', {
             ip: clientIP,
-            userAgent: req.headers['user-agent']?.substring(0, 50) + '...'
+            userAgent: userAgent.substring(0, 50) + '...',
+            conversationId: conversationId.substring(0, 50) + '...'
         });
 
         // ====================
@@ -503,11 +513,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const safeIncrementUsage = async () => {
                 if (shouldCountUsage && !usageIncremented) {
                     usageIncremented = true;
-                    const usageResult = await incrementUsage(userToken);
+                    const usageResult = await incrementUsage(userToken, conversationId);
                     console.log('[PROXY] Usage incremented after successful response:', {
                         userToken: userToken.substring(0, 8) + '...',
                         usage: usageResult.currentUsage,
-                        limit: usageResult.limit
+                        limit: usageResult.limit,
+                        shouldIncrement: usageResult.shouldIncrement,
+                        conversationId: conversationId.substring(0, 8) + '...'
                     });
                 }
             };
@@ -596,11 +608,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // Increment usage after successful non-stream response
             if (shouldCountUsage) {
-                const usageResult = await incrementUsage(userToken);
+                const usageResult = await incrementUsage(userToken, conversationId);
                 console.log('[PROXY] Usage incremented after successful response:', {
                     userToken: userToken.substring(0, 8) + '...',
                     usage: usageResult.currentUsage,
-                    limit: usageResult.limit
+                    limit: usageResult.limit,
+                    shouldIncrement: usageResult.shouldIncrement,
+                    conversationId: conversationId.substring(0, 8) + '...'
                 });
             }
 

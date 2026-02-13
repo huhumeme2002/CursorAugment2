@@ -278,37 +278,69 @@ export async function createKey(
  * @param keyName - The API key name
  * @returns Object with allowed status and current usage info
  */
-export async function incrementUsage(keyName: string): Promise<{
+export async function incrementUsage(keyName: string, conversationId?: string): Promise<{
     allowed: boolean;
     currentUsage: number;
     limit: number;
     reason?: string;
+    shouldIncrement: boolean; // Whether this request should actually increment
 }> {
     try {
         const data = await getKeyData(keyName);
-        if (!data) return { allowed: false, currentUsage: 0, limit: 0, reason: 'invalid_key' };
+        if (!data) return { allowed: false, currentUsage: 0, limit: 0, reason: 'invalid_key', shouldIncrement: false };
 
         if (data.usage_today.count >= data.daily_limit) {
             return {
                 allowed: false,
                 currentUsage: data.usage_today.count,
                 limit: data.daily_limit,
-                reason: 'daily_limit_reached'
+                reason: 'daily_limit_reached',
+                shouldIncrement: false
             };
         }
 
-        // Increment and save
-        data.usage_today.count += 1;
+        const now = Date.now();
+        const CONVERSATION_TURN_WINDOW_MS = 30000; // 30 seconds - requests within this window are same turn
+
+        // Check if this is part of the same conversation turn
+        let shouldIncrement = true;
+
+        if (conversationId && data.last_conversation_id === conversationId) {
+            // Same conversation ID - check timestamp
+            const timeSinceLastRequest = now - (data.last_request_timestamp || 0);
+            if (timeSinceLastRequest < CONVERSATION_TURN_WINDOW_MS) {
+                // Within 30s window and same conversation - don't increment
+                shouldIncrement = false;
+                console.log('[USAGE] Skipping increment - same conversation turn:', {
+                    conversationId,
+                    timeSinceLastRequest: `${timeSinceLastRequest}ms`,
+                    window: `${CONVERSATION_TURN_WINDOW_MS}ms`
+                });
+            }
+        }
+
+        // Update tracking fields
+        data.last_request_timestamp = now;
+        if (conversationId) {
+            data.last_conversation_id = conversationId;
+        }
+
+        // Increment only if this is a new conversation turn
+        if (shouldIncrement) {
+            data.usage_today.count += 1;
+        }
+
         await redis.set(keyName, data);
 
         return {
             allowed: true,
             currentUsage: data.usage_today.count,
-            limit: data.daily_limit
+            limit: data.daily_limit,
+            shouldIncrement
         };
     } catch (error) {
         console.error('Error incrementing usage:', error);
-        return { allowed: false, currentUsage: 0, limit: 0, reason: 'server_error' };
+        return { allowed: false, currentUsage: 0, limit: 0, reason: 'server_error', shouldIncrement: false };
     }
 }
 

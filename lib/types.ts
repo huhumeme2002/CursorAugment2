@@ -21,6 +21,8 @@ export interface RedisKeyData {
     session_timeout_minutes: number; // Keep for backward compatibility or potential future use
     selected_model?: string;        // Model selected by user (e.g., "gemini", "gpt5")
     selected_api_profile_id?: string; // ID of the specific backend API profile (independent of model)
+    last_request_timestamp?: number; // Unix timestamp (ms) of last request - for conversation turn detection
+    last_conversation_id?: string;   // Track conversation sessions to prevent duplicate counting
 }
 
 // Backup Profile configuration (for Waterfall fallback)
