@@ -145,6 +145,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (lastMessage?.role === 'user') {
                 const content = lastMessage.content;
 
+                // DEBUG: Log content structure to understand why object is failing
+                console.log('[PROXY] Content structure debug:', {
+                    contentType: typeof content,
+                    isArray: Array.isArray(content),
+                    contentKeys: typeof content === 'object' && content !== null ? Object.keys(content) : 'N/A',
+                    hasType: content?.hasOwnProperty('type'),
+                    typeValue: content?.type,
+                    contentPreview: typeof content === 'string' ? content.substring(0, 100) :
+                                  Array.isArray(content) ? `array[${content.length}]` :
+                                  typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other'
+                });
+
                 // Check if content is a tool_result
                 // Content can be string (actual user message) or array of content blocks
                 if (typeof content === 'string') {
@@ -159,7 +171,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     shouldCountUsage = !hasToolResult;
                 } else {
                     // Single object content - check type
-                    shouldCountUsage = content?.type !== 'tool_result';
+                    // If content is an object without 'type' property, it's likely a user message
+                    const isToolResult = content && typeof content === 'object' && content.type === 'tool_result';
+                    shouldCountUsage = !isToolResult;
                 }
             }
         }
