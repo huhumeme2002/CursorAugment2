@@ -5,6 +5,7 @@
  * Sử dụng: node scripts/update-quota-100-to-150.js
  */
 
+require('dotenv').config();
 const https = require('https');
 
 // Hàm gọi Upstash REST API
