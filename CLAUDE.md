@@ -67,16 +67,21 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
 - **Conversation Turn-Based Usage Counting** (CRITICAL - Updated 2026-02-13):
   - **Problem**: Claude Code makes 5-10 API calls per user prompt (tool use, parallel calls), causing usage to increment 5-10x
-  - **Solution**: Groups requests from same client within 60-second window as one conversation turn
+  - **Solution**: Groups requests from same prompt within 60-second window as one conversation turn
   - **Implementation**:
-    - Conversation ID = `${clientIP}:${userAgent}` (client fingerprint)
+    - Conversation ID = `${clientIP}:${userAgent}:${messageHash}` (client fingerprint + message content)
+    - Message hash = first 50 chars + length of last user message
     - Requests within 60s window with same conversation ID = same turn (only first increments usage)
-    - Window set to 60s to balance: long enough for complex prompts (30-50s), short enough to detect new prompts
+    - **Key insight**: Different prompts have different message content → different conversation IDs → counted separately
+    - This solves both problems:
+      - ✅ Multiple tool calls for same prompt = 1 usage (same message hash)
+      - ✅ New prompt after 30s = new usage (different message hash)
+      - ✅ Long prompts (>60s) = still 1 usage (same message hash throughout)
     - Usage incremented AFTER successful response (not before validation)
     - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
     - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
     - Failed requests (4xx/5xx) do NOT consume quota
-  - **Result**: 1 user prompt = 1 usage (regardless of how many tool calls Claude makes internally)
+  - **Result**: 1 user prompt = 1 usage (regardless of how many tool calls or how long it takes)
   - **Functions**: `checkUsageLimit(keyName)` for pre-validation, `incrementUsage(keyName, conversationId)` after 2xx response
 - **Waterfall Fallback**: When primary profile hits concurrency limit, cascades to backup profiles in order. Concurrency tracked via Redis counters `concurrency:{profile_id}`
 - **Streaming**: SSE heartbeat every 15s to prevent proxy timeouts. HTTP Keep-Alive connection pooling (50 concurrent, 10 idle connections per host)
@@ -91,12 +96,14 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Cache Invalidation**: Admin save endpoints must call the appropriate cache clear functions after writes
 - **Conversation Turn Tracking**:
   - `last_request_timestamp`: Unix timestamp (ms) of last request
-  - `last_conversation_id`: Client fingerprint for grouping requests into conversation turns
+  - `last_conversation_id`: Client fingerprint + message hash for grouping requests into conversation turns
   - 60-second window: Requests within this window with same conversation ID are treated as one turn
+  - Conversation ID includes message content hash to distinguish different prompts from same client
 - **Usage Functions**:
   - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
   - `incrementUsage(keyName, conversationId?)`: Increment usage counter (call ONLY after successful response)
     - If `conversationId` provided and matches previous request within 60s, skips increment
+    - Conversation ID format: `${clientIP}:${userAgent}:${messageHash}`
     - Returns `{ allowed, currentUsage, limit, shouldIncrement, reason? }`
 
 ### Redis Key Schema
@@ -208,9 +215,9 @@ When modifying usage counting logic:
 1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
 2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
 3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
-4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 60s window
-5. **Understand the time window** - 60 seconds is the window for grouping requests as one conversation turn (balanced to handle complex prompts while detecting new prompts)
-6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls
+4. **Use conversation turn detection** - Pass `conversationId` (format: `${clientIP}:${userAgent}:${messageHash}`) to `incrementUsage()` to group requests within 60s window
+5. **Understand the conversation ID** - Includes message content hash to distinguish different prompts from same client, solving both duplicate counting and prompt separation issues
+6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls or long execution times
 7. **Monitor logs** - Check for `[USAGE] Skipping increment - same conversation turn` messages to verify turn detection works
 
 When adding admin endpoints:

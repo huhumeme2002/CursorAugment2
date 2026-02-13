@@ -60,18 +60,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('X-Correlation-ID', correlationId);
 
     // Extract conversation ID for turn-based usage counting
-    // Strategy: Use a combination of user-agent + client-ip as conversation identifier
-    // This allows grouping requests from the same client within a time window
+    // Strategy: Use a combination of user-agent + client-ip + message hash as conversation identifier
+    // This allows grouping requests from the same prompt within a time window
     const userAgent = req.headers['user-agent'] || 'unknown';
     const forwarded = req.headers['x-forwarded-for'];
     const realIp = req.headers['x-real-ip'];
     const clientIP = forwarded
         ? (Array.isArray(forwarded) ? forwarded[0] : forwarded.split(',')[0])
         : (realIp ? (Array.isArray(realIp) ? realIp[0] : realIp) : 'unknown-ip');
-
-    // Create a stable conversation ID from client fingerprint
-    // This groups all requests from same client within 30s window as one turn
-    const conversationId = `${clientIP}:${userAgent.substring(0, 50)}`;
 
     const perfTracker = createPerformanceTracker('Proxy Request');
     const requestStart = Date.now();
@@ -178,6 +174,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             lastContentType: typeof requestBody.messages?.[requestBody.messages?.length - 1]?.content,
             shouldCountUsage: shouldCountUsage
         });
+
+        // Create conversation ID with message hash to detect new prompts
+        // This ensures that different prompts are counted separately, even if from same client
+        let conversationId = `${clientIP}:${userAgent.substring(0, 50)}`;
+
+        if (shouldCountUsage && requestBody.messages && requestBody.messages.length > 0) {
+            // Hash the last user message to detect new prompts
+            const lastMessage = requestBody.messages[requestBody.messages.length - 1];
+            const messageContent = typeof lastMessage.content === 'string'
+                ? lastMessage.content
+                : JSON.stringify(lastMessage.content);
+
+            // Simple hash function (first 50 chars + length)
+            const messageHash = `${messageContent.substring(0, 50)}_${messageContent.length}`;
+            conversationId = `${conversationId}:${messageHash}`;
+
+            console.log('[PROXY] Conversation ID with message hash:', {
+                conversationId: conversationId.substring(0, 100) + '...',
+                messagePreview: messageContent.substring(0, 50) + '...'
+            });
+        }
 
         // Check current usage (but don't increment yet)
         const currentUsageCheck = await checkUsageLimit(userToken);
