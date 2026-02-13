@@ -22,10 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(401).json({ error: 'Invalid token' });
         }
 
-        // Get key name and amount from request body
-        const { keyName, amount } = req.body;
+        // Get key name and amount from request body (accept both 'name' and 'keyName' for compatibility)
+        const { keyName, name, amount } = req.body;
+        const actualKeyName = keyName || name;
 
-        if (!keyName || typeof keyName !== 'string') {
+        if (!actualKeyName || typeof actualKeyName !== 'string') {
             return res.status(400).json({ error: 'Missing keyName in request body' });
         }
 
@@ -34,7 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Get current key data
-        const keyData = await getKeyData(keyName);
+        const keyData = await getKeyData(actualKeyName);
         if (!keyData) {
             return res.status(404).json({ error: 'Key not found' });
         }
@@ -44,13 +45,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         keyData.daily_limit += amount;
 
         // Save updated key data
-        await redis.set(keyName, keyData);
+        await redis.set(actualKeyName, keyData);
 
         return res.status(200).json({
             success: true,
-            message: `Daily limit increased by ${amount} for key "${keyName}"`,
+            message: `Daily limit increased by ${amount} for key "${actualKeyName}"`,
             data: {
-                keyName,
+                keyName: actualKeyName,
                 old_daily_limit: oldLimit,
                 new_daily_limit: keyData.daily_limit,
                 amount_added: amount,

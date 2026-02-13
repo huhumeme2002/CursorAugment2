@@ -22,15 +22,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(401).json({ error: 'Invalid token' });
         }
 
-        // Get key name from request body
-        const { keyName } = req.body;
+        // Get key name from request body (accept both 'name' and 'keyName' for compatibility)
+        const { keyName, name } = req.body;
+        const actualKeyName = keyName || name;
 
-        if (!keyName || typeof keyName !== 'string') {
+        if (!actualKeyName || typeof actualKeyName !== 'string') {
             return res.status(400).json({ error: 'Missing keyName in request body' });
         }
 
         // Get current key data
-        const keyData = await getKeyData(keyName);
+        const keyData = await getKeyData(actualKeyName);
         if (!keyData) {
             return res.status(404).json({ error: 'Key not found' });
         }
@@ -43,13 +44,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
 
         // Save updated key data
-        await redis.set(keyName, keyData);
+        await redis.set(actualKeyName, keyData);
 
         return res.status(200).json({
             success: true,
-            message: `Usage quota reset successfully for key "${keyName}"`,
+            message: `Usage quota reset successfully for key "${actualKeyName}"`,
             data: {
-                keyName,
+                keyName: actualKeyName,
                 daily_limit: keyData.daily_limit,
                 current_usage: 0,
                 usage_date: today
