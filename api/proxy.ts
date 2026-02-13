@@ -191,26 +191,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             shouldCountUsage: shouldCountUsage
         });
 
-        // Create conversation ID with message hash to detect new prompts
-        // This ensures that different prompts are counted separately, even if from same client
+        // Create conversation ID WITHOUT message hash
+        // Claude Opus modifies message content dynamically (adds suggestions, logs, etc.)
+        // causing hash-based detection to count same prompt multiple times
+        // Solution: Rely on 60s time window + client fingerprint only
         let conversationId = `${clientIP}:${userAgent.substring(0, 50)}`;
 
-        if (shouldCountUsage && requestBody.messages && requestBody.messages.length > 0) {
-            // Hash the last user message to detect new prompts
-            const lastMessage = requestBody.messages[requestBody.messages.length - 1];
-            const messageContent = typeof lastMessage.content === 'string'
-                ? lastMessage.content
-                : JSON.stringify(lastMessage.content);
-
-            // Simple hash function (first 50 chars + length)
-            const messageHash = `${messageContent.substring(0, 50)}_${messageContent.length}`;
-            conversationId = `${conversationId}:${messageHash}`;
-
-            console.log('[PROXY] Conversation ID with message hash:', {
-                conversationId: conversationId.substring(0, 100) + '...',
-                messagePreview: messageContent.substring(0, 50) + '...'
-            });
-        }
+        console.log('[PROXY] Conversation ID (time-based):', {
+            conversationId: conversationId,
+            note: 'Message hash removed due to Claude Opus dynamic content modification'
+        });
 
         // Check current usage (but don't increment yet)
         const currentUsageCheck = await checkUsageLimit(userToken);
