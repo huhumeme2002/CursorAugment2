@@ -47,7 +47,7 @@ function redisRequest(command, args = []) {
     });
 }
 
-// Hàm set dữ liệu vào Redis
+// Hàm set dữ liệu vào Redis (sử dụng GET endpoint với /set/key/value format)
 function redisSet(key, value) {
     const url = process.env.UPSTASH_REDIS_REST_URL;
     const token = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -56,21 +56,18 @@ function redisSet(key, value) {
         throw new Error('Thiếu UPSTASH_REDIS_REST_URL hoặc UPSTASH_REDIS_REST_TOKEN');
     }
 
-    const apiUrl = new URL('/set', url);
+    // Upstash REST API format: /set/key/value
+    const endpoint = '/set/' + encodeURIComponent(key) + '/' + encodeURIComponent(value);
+    const apiUrl = new URL(endpoint, url);
 
     return new Promise((resolve, reject) => {
-        const postData = JSON.stringify([key, value]);
-
         const options = {
-            method: 'POST',
             headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
+                'Authorization': `Bearer ${token}`
             }
         };
 
-        const req = https.request(apiUrl, options, (res) => {
+        https.get(apiUrl, options, (res) => {
             let data = '';
 
             res.on('data', (chunk) => {
@@ -84,14 +81,9 @@ function redisSet(key, value) {
                     reject(new Error(`Redis API error: ${res.statusCode} - ${data}`));
                 }
             });
-        });
-
-        req.on('error', (error) => {
+        }).on('error', (error) => {
             reject(error);
         });
-
-        req.write(postData);
-        req.end();
     });
 }
 
