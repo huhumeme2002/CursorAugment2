@@ -65,13 +65,18 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Model Transformation**: Client sends display name (e.g., "Claude-Opus-4.5-VIP"), proxy maps to `APIProfile.model_actual` for the backend
 - **System Prompt Injection**: Injects per-model system prompts from `model_config:{model_name}`. Skipped for `supperapi.store` URLs or when `APIProfile.disable_system_prompt_injection` is true
 - **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
-- **Smart Usage Counting** (CRITICAL - Fixed 2026-02-13):
-  - Usage is incremented AFTER successful response (not before validation)
-  - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
-  - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
-  - Failed requests (4xx/5xx) do NOT consume quota
-  - Client retries after errors are handled correctly (only success counts)
-  - Implementation: `checkUsageLimit()` for pre-validation, `incrementUsage()` after 2xx response
+- **Conversation Turn-Based Usage Counting** (CRITICAL - Updated 2026-02-13):
+  - **Problem**: Claude Code makes 5-10 API calls per user prompt (tool use, parallel calls), causing usage to increment 5-10x
+  - **Solution**: Groups requests from same client within 30-second window as one conversation turn
+  - **Implementation**:
+    - Conversation ID = `${clientIP}:${userAgent}` (client fingerprint)
+    - Requests within 30s window with same conversation ID = same turn (only first increments usage)
+    - Usage incremented AFTER successful response (not before validation)
+    - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
+    - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
+    - Failed requests (4xx/5xx) do NOT consume quota
+  - **Result**: 1 user prompt = 1 usage (regardless of how many tool calls Claude makes internally)
+  - **Functions**: `checkUsageLimit(keyName)` for pre-validation, `incrementUsage(keyName, conversationId)` after 2xx response
 - **Waterfall Fallback**: When primary profile hits concurrency limit, cascades to backup profiles in order. Concurrency tracked via Redis counters `concurrency:{profile_id}`
 - **Streaming**: SSE heartbeat every 15s to prevent proxy timeouts. HTTP Keep-Alive connection pooling (50 concurrent, 10 idle connections per host)
 - **URL Building** (`buildUpstreamUrl()`): If `api_url` ends with `/v1`, strips `/v1` from client path before appending
@@ -83,10 +88,15 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Schema Auto-Migration**: `getKeyData()` transparently migrates legacy key formats (activation-based, IP-based, concurrent-user-based) to current daily limit schema on first access
 - **Settings Cache**: 30s TTL with manual invalidation via `clearSettingsCache()`
 - **Cache Invalidation**: Admin save endpoints must call the appropriate cache clear functions after writes
+- **Conversation Turn Tracking**:
+  - `last_request_timestamp`: Unix timestamp (ms) of last request
+  - `last_conversation_id`: Client fingerprint for grouping requests into conversation turns
+  - 30-second window: Requests within this window with same conversation ID are treated as one turn
 - **Usage Functions**:
   - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
-  - `incrementUsage(keyName)`: Increment usage counter (call ONLY after successful response)
-  - Both return `{ allowed, currentUsage, limit, reason? }`
+  - `incrementUsage(keyName, conversationId?)`: Increment usage counter (call ONLY after successful response)
+    - If `conversationId` provided and matches previous request within 30s, skips increment
+    - Returns `{ allowed, currentUsage, limit, shouldIncrement, reason? }`
 
 ### Redis Key Schema
 ```
@@ -101,7 +111,7 @@ metrics:*                  → Performance metrics
 ```
 
 ### Core Types (`lib/types.ts`)
-- `RedisKeyData`: API key with `expiry`, `daily_limit`, `usage_today: { date, count }`, `selected_model`, `selected_api_profile_id`
+- `RedisKeyData`: API key with `expiry`, `daily_limit`, `usage_today: { date, count }`, `selected_model`, `selected_api_profile_id`, `last_request_timestamp`, `last_conversation_id`
 - `APIProfile`: Backend config with `api_key`, `api_url`, `model_actual`, `capabilities`, `is_active`, `disable_system_prompt_injection`
 - `BackupProfile`: Extends APIProfile concept with `concurrency_limit` for waterfall system
 - `Announcement`: System notifications with `type` (info/warning/error/success), `priority`, time-based activation
@@ -166,5 +176,7 @@ When modifying usage counting logic:
 1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
 2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
 3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
-4. **Use the right functions**: `checkUsageLimit()` for pre-validation, `incrementUsage()` only after 2xx response
-5. **Test with PM2 logs** - Verify each user action results in exactly 1 usage increment (not multiple)
+4. **Use conversation turn detection** - Pass `conversationId` to `incrementUsage()` to group requests within 30s window
+5. **Understand the time window** - 30 seconds is the window for grouping requests as one conversation turn
+6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls
+7. **Monitor logs** - Check for `[USAGE] Skipping increment - same conversation turn` messages to verify turn detection works
