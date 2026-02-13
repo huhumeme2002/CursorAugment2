@@ -4,330 +4,130 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**CursorAugment2** is a TypeScript-based AI API proxy that routes requests to multiple backends (Claude, GPT, Gemini, etc.) with Redis-based key management, rate limiting, and an admin dashboard. It provides an OpenAI-compatible API interface while managing multiple API profiles, user sessions, and per-key quotas.
+CursorAugment2 is a TypeScript AI API proxy that routes requests to multiple backends (Claude, GPT, Gemini, etc.) with Redis-based key management, rate limiting, and an admin dashboard. It provides an OpenAI-compatible API interface.
 
-**IMPORTANT: Stateless Architecture**
-- The proxy is **completely stateless** - it does NOT store conversation history
-- Clients must send the full messages array in each request (standard OpenAI-compatible behavior)
-- Redis only stores: API keys, settings, profiles, metrics, and announcements
-- No conversation state, chat history, or message storage exists in the proxy
+**Stateless architecture**: The proxy does NOT store conversation history. Clients must send the full messages array in each request. Redis only stores: API keys, settings, profiles, metrics, and announcements.
 
-**Dual Deployment Modes:**
-- **Vercel Serverless**: Serverless functions auto-generated from `api/` directory (production default)
-- **Express Standalone**: Full Express server with dynamic routing via `server.ts` (local dev, PM2 production)
+**Dual deployment modes**:
+- **Vercel Serverless**: Functions auto-generated from `api/` directory (production default)
+- **Express Standalone**: Dynamic routing via `server.ts` (local dev, PM2 production)
 
 ## Development Commands
 
-### Local Development
 ```bash
-# Install dependencies
-npm install
+npm install                # Install dependencies
+npm run dev:server         # Local Express server (recommended for dev)
+npm run dev                # Vercel dev environment (simulates serverless)
+npx tsc --noEmit           # TypeScript type checking
+npm run deploy             # Deploy to Vercel production (or: vercel --prod)
 
-# Run local development server (Express) - recommended for local dev
-npm run dev:server
+# API key management
+npm run key:create         # Create a new API key
+npm run key:list           # List all API keys
+npm run key:delete         # Delete an API key
 
-# Run with Vercel dev environment (simulates serverless)
-npm run dev
-
-# TypeScript type checking
-npx tsc --noEmit
-
-# Test proxy endpoint locally
-curl -X POST http://localhost:3000/api/v1/chat/completions \
-  -H "Authorization: Bearer your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Claude-Opus-4.5-VIP","messages":[{"role":"user","content":"Hello"}],"stream":true}'
-```
-
-### API Key Management (CLI)
-```bash
-# Create a new API key
-npm run key:create
-
-# List all API keys
-npm run key:list
-
-# Delete an API key
-npm run key:delete
-```
-
-### Deployment
-```bash
-# Deploy to Vercel production
-npm run deploy
-# or
-vercel --prod
-```
-
-### Production (PM2)
-```bash
-# Start with PM2 (uses ecosystem.config.js)
+# PM2 production (uses ecosystem.config.js - cluster mode, all CPU cores)
 pm2 start ecosystem.config.js
-
-# Monitor
-pm2 monit
-
-# Logs
 pm2 logs cursor-augment-proxy
-
-# Restart
-pm2 restart cursor-augment-proxy
-
-# Stop
-pm2 stop cursor-augment-proxy
 ```
 
-**PM2 Configuration** (`ecosystem.config.js`):
-- Cluster mode with `instances: "max"` (uses all CPU cores)
-- Auto-restart on crashes
-- 1GB memory limit per instance
-- TypeScript execution via `ts-node/register`
+No linting or formatting tools are configured (no eslint, prettier, or editorconfig).
+
+No automated tests exist. Manual testing only — see Testing section below.
 
 ## Architecture
 
 ### Request Flow
 ```
-Client Request
-    ↓
-server.ts (Express app with dynamic routing)
-    ↓
-/api/* routes → Dynamically loaded from ./api/**/*.ts
-    ↓
-Authentication (JWT for admin, API key for users)
-    ↓
-api/proxy.ts (Transform request & route to backend)
-    ↓
-Backend API (Claude, GPT, Gemini, etc.)
-    ↓
-Stream response back to client
+Client → server.ts (Express, dynamic routing) → Authentication → api/proxy.ts → Backend API → Stream response
 ```
 
-### Dynamic Route System
-The server uses a dynamic routing system in `server.ts` (Express mode only) that maps URL paths to TypeScript files:
+### Dynamic Route System (Express mode only)
+`server.ts` maps URL paths to TypeScript files at runtime:
 - `/api/admin/keys/list` → `./api/admin/keys/list.ts`
-- `/api/v1/chat/completions` → `./api/v1/chat/completions.ts`
-- Each route file must export a default async function: `export default async (req, res) => { ... }`
-- In Vercel mode, routes are automatically mapped by the platform's file-based routing
-- Security: Directory traversal protection prevents accessing files outside `api/` directory
-- File resolution: Checks for exact match, then `.ts`, then `.js` extension
+- Each route file exports: `export default async (req, res) => { ... }`
+- Security: Directory traversal protection, checks `.ts` then `.js` extensions
+- Special case: `/api/proxy` and `/v1/*` routes go directly to `api/proxy.ts`
+- `/health` endpoint returns `{ status: 'ok', time: ... }`
+- In Vercel mode, file-based routing is handled by the platform automatically
 
-### Authentication Layers
-1. **Admin Authentication**: JWT-based (24h expiry)
-   - Login via `/api/admin/login` with `ADMIN_PASSWORD`
-   - Token stored in localStorage, sent in `Authorization: Bearer <token>` header
+### Two Proxy Implementations
+- `api/proxy.ts`: **Primary** — full waterfall fallback, smart usage counting, concurrency tracking, heartbeat streaming
+- `api/v1/chat/completions.ts`: **Legacy** — simpler proxy without waterfall/backup profiles, hardcoded model mapping. Not used in Express mode (requests route to proxy.ts instead)
 
-2. **User Authentication**: API key-based
-   - Header: `Authorization: Bearer <api_key>`
-   - Keys stored in Redis with schema: `api_key:{key_id}`
-   - Validates expiry, daily limits, and session tracking
+### Authentication
+1. **Admin**: JWT-based (24h expiry). Login via `/api/admin/login` with `ADMIN_PASSWORD`. Token in `Authorization: Bearer <token>` header.
+2. **User**: API key-based. Header: `Authorization: Bearer <api_key>`. Keys stored in Redis as `api_key:{key_id}`.
 
-### Core Data Models (lib/types.ts)
+## Key Implementation Details
 
-**RedisKeyData**: API key storage schema
-- `expiry`: Expiration date (YYYY-MM-DD)
-- `daily_limit`: Max requests per day
-- `usage_today`: { date, count }
-- `session_timeout_minutes`: Session expiry time
-- `selected_model`: Current model name
-- `selected_api_profile_id`: Active backend profile
+### Proxy Core (`api/proxy.ts`)
+- **Model Transformation**: Client sends display name (e.g., "Claude-Opus-4.5-VIP"), proxy maps to `APIProfile.model_actual` for the backend
+- **System Prompt Injection**: Injects per-model system prompts from `model_config:{model_name}`. Skipped for `supperapi.store` URLs or when `APIProfile.disable_system_prompt_injection` is true
+- **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
+- **Smart Usage Counting** (CRITICAL - Fixed 2026-02-13):
+  - Usage is incremented AFTER successful response (not before validation)
+  - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
+  - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
+  - Failed requests (4xx/5xx) do NOT consume quota
+  - Client retries after errors are handled correctly (only success counts)
+  - Implementation: `checkUsageLimit()` for pre-validation, `incrementUsage()` after 2xx response
+- **Waterfall Fallback**: When primary profile hits concurrency limit, cascades to backup profiles in order. Concurrency tracked via Redis counters `concurrency:{profile_id}`
+- **Streaming**: SSE heartbeat every 15s to prevent proxy timeouts. HTTP Keep-Alive connection pooling (50 concurrent, 10 idle connections per host)
+- **URL Building** (`buildUpstreamUrl()`): If `api_url` ends with `/v1`, strips `/v1` from client path before appending
+- Version tracked via `PROXY_VERSION` constant
 
-**APIProfile**: Backend API configuration
-- `id`, `name`: Profile identification
-- `api_key`, `api_url`: Backend credentials
-- `model_actual`: Real model name for backend
-- `capabilities`: Supported features
-- `speed`: Performance tier
-- `is_active`: Enable/disable flag
+### Redis Layer (`lib/redis.ts`)
+- **L1 Cache (LRU in-memory)**: Profiles (60s TTL, 100 max), backup profiles (60s), model configs (120s). Reduces Redis calls ~90%
+- **L2 Cache (Redis)**: All persistent data via Upstash REST API
+- **Schema Auto-Migration**: `getKeyData()` transparently migrates legacy key formats (activation-based, IP-based, concurrent-user-based) to current daily limit schema on first access
+- **Settings Cache**: 30s TTL with manual invalidation via `clearSettingsCache()`
+- **Cache Invalidation**: Admin save endpoints must call the appropriate cache clear functions after writes
+- **Usage Functions**:
+  - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
+  - `incrementUsage(keyName)`: Increment usage counter (call ONLY after successful response)
+  - Both return `{ allowed, currentUsage, limit, reason? }`
 
-**BackupProfile**: Fallback configuration for waterfall system
-- Extends `APIProfile` with `concurrency_limit` field
-- Used when primary profile reaches max concurrent requests
-- Profiles are tried in order until one accepts the request
-
-**Session**: Concurrent user tracking
-- `session_id`, `device_id`: Session identification
-- `ip_address`: Client IP
-- `created_at`, `last_activity`: Timestamps
-- `request_count`: Total requests in session
-- `rate_window_start`: Rate limiting window
-
-**Announcement**: System-wide notifications
-- `id`, `title`, `content`: Announcement details
-- `type`: Visual style (info/warning/error/success)
-- `priority`: Display order (higher = shown first)
-- `is_active`: Enable/disable flag
-- `start_time`, `end_time`: Optional time-based activation
-
-### Redis Schema
+### Redis Key Schema
 ```
-Keys:
-- api_key:{key_id} → RedisKeyData
-- session:{session_id} → Session (interface defined but not actively used)
-- model_config:{model_name} → ModelConfig
-- settings → Global configuration
-- api_profile:{profile_id} → APIProfile
-- backup_profile:{profile_id} → BackupProfile
-- concurrency:{profile_id} → Number (current concurrent requests)
-- announcement:{announcement_id} → Announcement
-- metrics:* → Performance metrics (aggregated periodically)
-
-NOT stored (stateless design):
-- conversation:* - No conversation history
-- chat_history:* - No message storage
-- messages:* - No chat state
-- thread:* - No thread tracking
+api_key:{key_id}           → RedisKeyData (quota, expiry, usage)
+api_profile:{profile_id}   → APIProfile (backend config)
+backup_profile:{profile_id}→ BackupProfile (fallback config with concurrency_limit)
+concurrency:{profile_id}   → Number (current concurrent requests)
+model_config:{model_name}  → ModelConfig (system prompts, max 10K chars)
+settings                   → Global configuration
+announcement:{id}          → Announcement
+metrics:*                  → Performance metrics
 ```
 
-**Schema Auto-Migration**: The `getKeyData()` function in `lib/redis.ts` automatically migrates legacy key formats (activation-based, IP-based, concurrent-user-based) to the current daily limit schema. Migration happens transparently on first access.
+### Core Types (`lib/types.ts`)
+- `RedisKeyData`: API key with `expiry`, `daily_limit`, `usage_today: { date, count }`, `selected_model`, `selected_api_profile_id`
+- `APIProfile`: Backend config with `api_key`, `api_url`, `model_actual`, `capabilities`, `is_active`, `disable_system_prompt_injection`
+- `BackupProfile`: Extends APIProfile concept with `concurrency_limit` for waterfall system
+- `Announcement`: System notifications with `type` (info/warning/error/success), `priority`, time-based activation
 
-## Key Files
-
-### Entry Points
-- `server.ts`: Express server with dynamic API routing, 5-minute timeout for long AI generations (standalone mode)
-- `api/proxy.ts`: Main proxy handler that forwards requests to backend APIs (used by both modes)
-- `vercel.json`: Vercel configuration for URL rewrites and CORS headers (serverless mode)
-
-### Core Libraries (lib/)
-- `auth.ts`: JWT generation/verification, admin password validation
-- `redis.ts`: Redis connection with LRU cache layer (Upstash REST API)
-  - Multi-layer caching: L1 (memory LRU) → L2 (Redis)
-  - Reduces Redis calls by ~90% for frequently accessed data
-  - Auto-migrates legacy key schemas to current format
-- `types.ts`: TypeScript interfaces for all data models
-- `logger.ts`: Logging utility with correlation ID tracking for request tracing
-  - Correlation IDs propagate through entire request lifecycle
-  - Enables distributed tracing across proxy → backend → response
-- `metrics.ts`: Performance tracking and aggregation
-  - Tracks request latency, error rates, and throughput
-  - In-memory aggregation with periodic Redis persistence
-- `utils.ts`: General utility functions
-
-### API Endpoints (api/)
-All endpoints are dynamically loaded by `server.ts`. Key endpoints:
-
-**Admin Panel** (JWT-protected):
-- `/api/admin/login`: Admin authentication
-- `/api/admin/keys/*`: API key CRUD operations
-- `/api/admin/profiles/*`: Backend profile management
-- `/api/admin/backup-profiles/*`: Fallback profile management
-- `/api/admin/models/*`: Model configuration (system prompts)
-- `/api/admin/settings/*`: Global settings
-- `/api/admin/metrics`: Usage statistics
-- `/api/admin/cache/clear`: Clear Redis cache
-- `/api/admin/concurrency-status`: View current concurrency per profile
-- `/api/admin/reset-concurrency`: Reset concurrency counters
-- `/api/admin/announcement/*`: System-wide announcements (get/save/delete)
-
-**User Endpoints** (API key-protected):
-- `/api/user/status`: Check quota and limits
-- `/api/user/profiles`: List available backend profiles
-- `/api/user/select-profile`: Switch backend profile
-- `/api/user/model`: Get/set current model
-- `/api/user/announcement`: Get active system announcements
-
-**AI Proxy**:
-- `/api/v1/chat/completions`: OpenAI-compatible chat endpoint (main proxy)
-- `/api/proxy`: Direct proxy endpoint
-
-### Frontend
-- `public/admin/index.html`: Admin dashboard UI
-- `public/admin/app.js`: Dashboard logic
-- `public/user/index.html`: User profile management
+### Utility Libraries
+- `lib/auth.ts`: `generateToken()`, `verifyToken()`, `verifyAdminPassword()`
+- `lib/logger.ts`: Winston-based logging with correlation ID tracking. Known issue: uses global `'current'` key in Map — race condition under high concurrency (should use AsyncLocalStorage)
+- `lib/metrics.ts`: `MetricsCollector` singleton tracking latency, error rates, throughput with percentile calculations (p50/p95/p99)
+- `lib/utils.ts`: `generateUUID()`, `retryWithBackoff()`, `CircuitBreaker` class, `fetchWithRetry()`
 
 ## Environment Variables
 
-Required variables (see `.env.example`):
+Required (see `.env.example`):
 ```bash
-API_KEY_GOC=              # Primary backend API key (NewCLI or other AI API key)
-UPSTASH_REDIS_REST_URL=   # Redis REST URL (from Upstash dashboard)
-UPSTASH_REDIS_REST_TOKEN= # Redis REST token (from Upstash dashboard)
-ADMIN_PASSWORD=           # Admin panel password (choose a strong password)
-JWT_SECRET=               # 32-char hex for JWT signing (generate using command below)
+API_KEY_GOC=              # Primary backend API key
+UPSTASH_REDIS_REST_URL=   # Redis REST URL (Upstash)
+UPSTASH_REDIS_REST_TOKEN= # Redis REST token (Upstash)
+ADMIN_PASSWORD=           # Admin panel password
+JWT_SECRET=               # 32-char hex: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Generate JWT_SECRET:
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
+Optional: `PORT` (default 3000), `NODE_ENV`
 
-Optional variables:
-```bash
-PORT=3000                 # Server port (default: 3000)
-NODE_ENV=production       # Environment mode
-```
+## Adding a New Admin Endpoint
 
-## Important Implementation Details
-
-### Dynamic Route Loading
-- Routes are loaded at runtime using `require()` in `server.ts` (Express mode)
-- Security check prevents directory traversal attacks
-- Supports both `.ts` and `.js` files
-- Returns 404 if route file doesn't exist or has no default export
-- In Vercel mode, routes are statically analyzed at build time
-- Special case: `/api/proxy` is handled directly by importing `api/proxy.ts`
-
-### Streaming Support
-- Native Node.js streaming for AI responses
-- 5-minute server timeout to handle long generations (Express mode)
-- 10MB payload limit for requests/responses
-- **Heartbeat mechanism**: Sends SSE comments every 15 seconds during streaming to prevent nginx/proxy timeouts during long AI thinking periods
-- HTTP Keep-Alive connection pooling in `api/proxy.ts` reduces SSL handshake overhead (~100ms → ~0ms)
-  - Reuses TCP connections via `httpsAgent` with `keepAlive: true`
-  - Maintains up to 50 concurrent connections per host
-  - Keeps 10 idle connections ready for instant reuse
-- Stream cleanup: Concurrency counters are decremented when stream completes, errors, or client disconnects
-
-### Rate Limiting & Concurrency Management
-- Per-day quotas stored in `RedisKeyData.usage_today`
-- Session-based concurrent user tracking with automatic cleanup
-- **Smart Usage Counting**: Only counts actual user messages, not tool results or assistant messages
-  - Checks if last message has `role: "user"` and content is not a `tool_result`
-  - Prevents double-counting during multi-turn tool use conversations
-- **Waterfall Fallback System**: When primary profile hits concurrency limit, automatically cascades to backup profiles
-  - Backup profiles defined in `backup_profile:{id}` with `concurrency_limit` field
-  - Concurrency tracked via Redis counters: `concurrency:{profile_id}`
-  - Incremented on request start, decremented on completion/error/disconnect
-  - Admin endpoints: `/api/admin/concurrency-status`, `/api/admin/reset-concurrency`
-- **User Profile Selection**: Users can select a specific API profile, which bypasses waterfall logic
-
-### Model Transformation
-- Client sends model name (e.g., "Claude-Opus-4.5-VIP")
-- Proxy transforms to actual backend model name via `APIProfile.model_actual`
-- Supports custom system prompts per model via `model_config:{model_name}` (max 10K characters)
-- **System Prompt Bypass**: Automatically skips system prompt injection for `supperapi.store` URLs or when `APIProfile.disable_system_prompt_injection` is true, to prevent conflicts with backend-managed prompts
-- **Messages Array Passthrough**: The proxy forwards the entire messages array unchanged from client to backend (no filtering, truncation, or modification except system prompt injection)
-- Proxy version is tracked in `api/proxy.ts` via `PROXY_VERSION` constant for deployment verification
-
-### URL Building Logic
-The proxy uses `buildUpstreamUrl()` in `api/proxy.ts` to construct backend URLs:
-- If `api_url` ends with `/v1`, strips `/v1` from client path before appending
-- Otherwise, appends full client path to base URL
-- Matches CloudFlare Worker URL transformation logic
-- Example: `https://code.newcli.com/claude/droid/v1` + `/v1/chat/completions` → `https://code.newcli.com/claude/droid/v1/chat/completions`
-
-### Vercel Deployment
-- `vercel.json` configures URL rewrites for `/v1/*` routes
-- CORS headers configured for cross-origin requests
-- Serverless functions auto-generated from `api/` directory structure
-
-### Caching Strategy
-**Three-tier caching architecture**:
-1. **L1 Cache (LRU in-memory)**: API profiles, backup profiles, model configs
-   - 60-120s TTL depending on data type
-   - Reduces Redis calls by ~90%
-   - Automatically invalidated on admin updates
-2. **L2 Cache (Redis)**: All persistent data
-   - API keys, sessions, settings, profiles
-   - Upstash Redis with REST API
-3. **Connection Pool Cache**: HTTPS Keep-Alive connections
-   - Reuses TCP/SSL connections to backend APIs
-   - Reduces latency from ~100ms to ~0ms per request
-
-## Common Development Patterns
-
-### Adding a New Admin Endpoint
-1. Create file: `api/admin/{feature}/{action}.ts`
-2. Implement handler with JWT validation:
+Create `api/admin/{feature}/{action}.ts` — no changes to `server.ts` needed:
 ```typescript
 import { verifyToken } from '../../../lib/auth';
 
@@ -339,87 +139,32 @@ export default async (req, res) => {
     // Your logic here
 };
 ```
-3. Server automatically routes `/api/admin/{feature}/{action}` to your file
-4. No need to modify `server.ts` - dynamic routing handles it
-
-### Adding a New Backend Profile Type
-1. Update `APIProfile` interface in `lib/types.ts`
-2. Create handler in `api/admin/profiles/`
-3. Update proxy logic in `api/proxy.ts` to handle new profile type
-
-### Modifying API Key Schema
-1. Update `RedisKeyData` in `lib/types.ts`
-2. Update all endpoints that read/write keys
-3. Consider backward compatibility for existing keys in Redis
-4. Update auto-migration logic in `lib/redis.ts` `getKeyData()` function if needed
-
-### Debugging Request Flow
-1. Check correlation ID in response headers: `X-Correlation-ID`
-2. Search logs for correlation ID to trace entire request lifecycle
-3. Use `/api/debug-key` endpoint to inspect key data without authentication (dev only)
-4. Monitor concurrency status via `/api/admin/concurrency-status`
-5. Check Redis directly using Upstash console for data verification
 
 ## Testing
 
-The codebase doesn't include automated tests. Manual testing workflow:
-1. Start local server: `npm run dev:server`
-2. Test admin login: `POST http://localhost:3000/api/admin/login`
-3. Create test API key via admin panel or CLI: `npm run key:create`
-4. Test proxy endpoint: `POST http://localhost:3000/api/v1/chat/completions`
-5. Monitor logs for errors and correlation IDs
-6. Check concurrency tracking: `GET http://localhost:3000/api/admin/concurrency-status`
-
-**Debug Scripts** (in root directory):
-- `debug-key.js`: Direct Redis key inspection (requires env vars)
-- `debug-key-via-api.js`: Test key validation via API endpoint
-
-**Testing Tips**:
-- Use correlation IDs (`X-Correlation-ID` header) to trace requests through logs
-- Test streaming with `"stream": true` in request body
-- Test tool use scenarios to verify usage counting only counts user messages
-- Test waterfall fallback by setting low concurrency limits on default profile
+Manual testing only:
+1. `npm run dev:server` to start local server
+2. Test admin login: `POST /api/admin/login`
+3. Create test key: `npm run key:create`
+4. Test proxy: `POST /api/v1/chat/completions` with `Authorization: Bearer <key>`
+5. Trace requests via `X-Correlation-ID` response header
+6. Debug scripts: `debug-key.js` (direct Redis), `debug-key-via-api.js` (via API)
 
 ## Troubleshooting
 
-### 403 Forbidden Errors
-See `FIX_403_FORBIDDEN.md` for detailed troubleshooting steps.
+- **403 Forbidden**: See `FIX_403_FORBIDDEN.md`
+- **Nginx setup**: See `NGINX_CONFIGURATION.md`
+- **Cache issues**: See `SETTINGS_CACHE.md`
+- **Usage counting issues**: See `USAGE_COUNTING_FIX.md` for the 2026-02-13 fix that resolved 1 prompt being counted as 5 requests
+- **Stuck concurrency counters**: `GET /api/admin/concurrency-status`, then `POST /api/admin/reset-concurrency`. Usually caused by server crashes during streaming
+- **"Context memory" complaints**: Not a proxy bug — proxy is stateless and forwards all messages unchanged. Client is likely not sending full history. Debug by logging `requestBody.messages.length` in `api/proxy.ts`
+- **TypeScript errors**: Check `tsc_output.txt` and `tsc_output_2.txt` for previous issues. Note: `tsconfig.json` only includes `api/**/*` and `lib/**/*` — `server.ts` is excluded from type checking
 
-### Nginx Configuration
-See `NGINX_CONFIGURATION.md` for reverse proxy setup.
+## Critical Implementation Rules
 
-### Settings Cache Issues
-See `SETTINGS_CACHE.md` for cache management details.
-
-### Concurrency Counter Stuck
-If concurrency counters don't decrement properly (e.g., due to crashed requests):
-1. Check current status: `GET /api/admin/concurrency-status`
-2. Reset counters: `POST /api/admin/reset-concurrency`
-3. Monitor logs for correlation IDs of stuck requests
-4. Common causes: Server crashes during streaming, client disconnects not handled, network timeouts
-
-### TypeScript Compilation Errors
-Check `tsc_output.txt` and `tsc_output_2.txt` for previous compilation issues.
-
-### Performance Issues
-1. Check LRU cache hit rates in logs (should be ~90% for profiles/models)
-2. Monitor Redis latency via Upstash dashboard
-3. Review metrics endpoint: `GET /api/admin/metrics`
-4. Verify Keep-Alive connections are being reused (check proxy logs)
-
-### Common Errors
-- **"Invalid API key"**: Key not found in Redis - verify key exists using `npm run key:list`
-- **"Daily limit reached"**: User exceeded quota - check usage via admin panel
-- **"Service Unavailable"**: No API sources configured - verify `API_KEY_GOC` env var and settings
-- **"Request timeout"**: Backend took >5 minutes - check backend API status
-- **Stream disconnects**: Check heartbeat logs, verify nginx timeout settings (should be >60s)
-
-### Context Memory Issues
-If users report "poor context memory" or "AI forgets previous messages":
-- **This is NOT a proxy bug** - the proxy is stateless by design and forwards all messages unchanged
-- Root causes are typically:
-  1. Client application not sending full conversation history (most common)
-  2. Backend API context handling issues
-  3. System prompt too long (reduces available context window)
-- Debug by logging `requestBody.messages.length` in `api/proxy.ts` to verify client is sending full history
-- The proxy does NOT truncate, filter, or store conversation history
+When modifying usage counting logic:
+1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
+2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
+3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
+4. **Use the right functions**: `checkUsageLimit()` for pre-validation, `incrementUsage()` only after 2xx response
+5. **Test with PM2 logs** - Verify each user action results in exactly 1 usage increment (not multiple)
