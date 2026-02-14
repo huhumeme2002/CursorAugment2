@@ -24,6 +24,95 @@ const DEFAULT_API_BASE = 'https://code.newcli.com/claude/droid/v1';
 const PROXY_VERSION = '3.2.0-monitored';
 
 /**
+ * Rewrite model name in response data (case-insensitive, deep object traversal)
+ * @param data - Response data (object, string, or array)
+ * @param actualModel - The actual model name from upstream (e.g., "gpt-4", "claude-3-5-haiku-20241022")
+ * @param displayModel - The display model name for client (e.g., "Claude-Opus-4.5-VIP")
+ * @returns Modified data with model names replaced
+ */
+function rewriteModelName(data: any, actualModel: string, displayModel: string): any {
+    if (!actualModel || !displayModel) return data;
+
+    // Handle null/undefined
+    if (data === null || data === undefined) return data;
+
+    // Handle string - case-insensitive replacement
+    if (typeof data === 'string') {
+        // Create case-insensitive regex
+        const regex = new RegExp(actualModel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        return data.replace(regex, displayModel);
+    }
+
+    // Handle array - recursively process each element
+    if (Array.isArray(data)) {
+        return data.map(item => rewriteModelName(item, actualModel, displayModel));
+    }
+
+    // Handle object - recursively process each property
+    if (typeof data === 'object') {
+        const result: any = {};
+        for (const key in data) {
+            if (data.hasOwnProperty(key)) {
+                result[key] = rewriteModelName(data[key], actualModel, displayModel);
+            }
+        }
+        return result;
+    }
+
+    // Handle primitives (number, boolean, etc.)
+    return data;
+}
+
+/**
+ * Rewrite model name in SSE chunk (handles both Anthropic and OpenAI formats)
+ * @param chunk - SSE chunk text
+ * @param actualModel - The actual model name from upstream
+ * @param displayModel - The display model name for client
+ * @returns Modified chunk with model names replaced
+ */
+function rewriteSSEChunk(chunk: string, actualModel: string, displayModel: string): string {
+    if (!actualModel || !displayModel) return chunk;
+
+    const lines = chunk.split('\n');
+    const modifiedLines: string[] = [];
+
+    for (const line of lines) {
+        // Skip empty lines and comments
+        if (!line.trim() || line.startsWith(':')) {
+            modifiedLines.push(line);
+            continue;
+        }
+
+        // Process data lines
+        if (line.startsWith('data: ')) {
+            const dataContent = line.slice(6); // Remove "data: " prefix
+
+            // Skip [DONE] marker
+            if (dataContent === '[DONE]') {
+                modifiedLines.push(line);
+                continue;
+            }
+
+            try {
+                // Parse JSON and rewrite model names
+                const parsed = JSON.parse(dataContent);
+                const rewritten = rewriteModelName(parsed, actualModel, displayModel);
+                modifiedLines.push('data: ' + JSON.stringify(rewritten));
+            } catch (e) {
+                // If not valid JSON, do simple text replacement (case-insensitive)
+                const regex = new RegExp(actualModel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+                modifiedLines.push(line.replace(regex, displayModel));
+            }
+        } else {
+            // Other SSE fields (event:, id:, retry:)
+            modifiedLines.push(line);
+        }
+    }
+
+    return modifiedLines.join('\n');
+}
+
+/**
  * Build upstream URL matching CloudFlare Worker logic
  * @param apiBase - Base URL (e.g., "https://code.newcli.com/claude/droid" or "https://code.newcli.com/claude/droid/v1")
  * @param clientPath - Path from client request (e.g., "/v1/chat/completions" or "/v1/messages")
@@ -649,10 +738,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         // Ignore parse errors - not all chunks contain JSON
                     }
 
-                    // Basic transformation
+                    // Rewrite model names in SSE chunks (handles Anthropic and OpenAI formats)
                     if (modelDisplay && modelActual) {
-                        chunk = chunk.replace(new RegExp(modelActual, 'g'), modelDisplay);
+                        chunk = rewriteSSEChunk(chunk, modelActual, modelDisplay);
                     }
+                    // Also replace "Claude Code" branding
                     chunk = chunk.replace(/Claude Code/g, 'Claude Opus');
 
                     res.write(chunk);
@@ -701,10 +791,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const duration = Date.now() - requestStart;
             metrics.recordRequest(req.url || '/unknown', true, duration);
 
-            // ... (Replacements) ...
-            const modifiedData = JSON.parse(
-                JSON.stringify(data).replace(new RegExp(modelActual, 'g'), modelDisplay)
-            );
+            // Rewrite model names in response body (deep object traversal, case-insensitive)
+            const modifiedData = rewriteModelName(data, modelActual, displayModel);
+
+            // Also rewrite response headers if they contain model info
+            const responseHeaders: any = {};
+            for (const [key, value] of Object.entries(response.headers.raw())) {
+                if (typeof value === 'string' && modelActual && modelDisplay) {
+                    const regex = new RegExp(modelActual.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+                    responseHeaders[key] = value.replace(regex, modelDisplay);
+                } else {
+                    responseHeaders[key] = value;
+                }
+            }
+
+            // Set rewritten headers
+            for (const [key, value] of Object.entries(responseHeaders)) {
+                if (key.toLowerCase() !== 'content-length' && key.toLowerCase() !== 'transfer-encoding') {
+                    res.setHeader(key, value);
+                }
+            }
+
             return res.status(200).json(modifiedData);
         }
     } catch (error) {
