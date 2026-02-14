@@ -18,10 +18,11 @@ CursorAugment2 is a TypeScript AI API proxy that routes requests to multiple bac
 npm install                # Install dependencies
 npm run dev:server         # Local Express server (recommended for dev)
 npm run dev                # Vercel dev environment (simulates serverless)
+npm start                  # Production Express server (same as dev:server)
 npx tsc --noEmit           # TypeScript type checking
 npm run deploy             # Deploy to Vercel production (or: vercel --prod)
 
-# API key management
+# API key management (CLI scripts)
 npm run key:create         # Create a new API key
 npm run key:list           # List all API keys
 npm run key:delete         # Delete an API key
@@ -29,6 +30,8 @@ npm run key:delete         # Delete an API key
 # PM2 production (uses ecosystem.config.js - cluster mode, all CPU cores)
 pm2 start ecosystem.config.js
 pm2 logs cursor-augment-proxy
+pm2 restart cursor-augment-proxy
+pm2 stop cursor-augment-proxy
 ```
 
 No linting or formatting tools are configured (no eslint, prettier, or editorconfig).
@@ -130,6 +133,14 @@ metrics:*                  → Performance metrics
 - `lib/logger.ts`: Winston-based logging with correlation ID tracking. Known issue: uses global `'current'` key in Map — race condition under high concurrency (should use AsyncLocalStorage)
 - `lib/metrics.ts`: `MetricsCollector` singleton tracking latency, error rates, throughput with percentile calculations (p50/p95/p99)
 - `lib/utils.ts`: `generateUUID()`, `retryWithBackoff()`, `CircuitBreaker` class, `fetchWithRetry()`
+
+### User-Facing API (`api/user/`)
+Authenticated endpoints for API key holders (not admin):
+- `GET /api/user/status` — key usage, quota, expiry info
+- `GET /api/user/model` — current selected model
+- `GET /api/user/profiles` — available API profiles
+- `POST /api/user/select-profile` — switch active profile
+- `GET /api/user/announcement` — active system announcements
 
 ## Environment Variables
 

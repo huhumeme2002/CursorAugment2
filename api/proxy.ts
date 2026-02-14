@@ -587,6 +587,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             const decoder = new TextDecoder();
+            let streamTokenUsage: { input_tokens?: number; output_tokens?: number } = {};
 
             try {
                 while (true) {
@@ -595,6 +596,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         // Stream finished successfully
                         clearInterval(heartbeatInterval);
                         await safeDecrement('Stream complete');
+
+                        // Log token usage from stream
+                        if (streamTokenUsage.input_tokens || streamTokenUsage.output_tokens) {
+                            console.log('[PROXY] Token usage (stream):', {
+                                key: userToken.substring(0, 8) + '...',
+                                input_tokens: streamTokenUsage.input_tokens || 0,
+                                output_tokens: streamTokenUsage.output_tokens || 0,
+                                total_tokens: (streamTokenUsage.input_tokens || 0) + (streamTokenUsage.output_tokens || 0),
+                                source: activeSource!.name
+                            });
+                        }
 
                         // Increment usage after successful stream
                         await safeIncrementUsage();
@@ -608,6 +620,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     }
 
                     let chunk = decoder.decode(value, { stream: true });
+
+                    // Extract token usage from SSE stream events
+                    // Anthropic: message_delta with usage, or message_start with usage
+                    // OpenAI: final chunk with usage field
+                    try {
+                        const lines = chunk.split('\n');
+                        for (const line of lines) {
+                            if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
+                            const jsonStr = line.slice(6);
+                            const parsed = JSON.parse(jsonStr);
+
+                            // Anthropic format: message_start has input_tokens, message_delta has output_tokens
+                            if (parsed.type === 'message_start' && parsed.message?.usage) {
+                                streamTokenUsage.input_tokens = parsed.message.usage.input_tokens;
+                            }
+                            if (parsed.type === 'message_delta' && parsed.usage) {
+                                streamTokenUsage.output_tokens = parsed.usage.output_tokens;
+                            }
+
+                            // OpenAI format: usage in final chunk
+                            if (parsed.usage) {
+                                if (parsed.usage.prompt_tokens) streamTokenUsage.input_tokens = parsed.usage.prompt_tokens;
+                                if (parsed.usage.completion_tokens) streamTokenUsage.output_tokens = parsed.usage.completion_tokens;
+                            }
+                        }
+                    } catch (_) {
+                        // Ignore parse errors - not all chunks contain JSON
+                    }
+
                     // Basic transformation
                     if (modelDisplay && modelActual) {
                         chunk = chunk.replace(new RegExp(modelActual, 'g'), modelDisplay);
@@ -628,6 +669,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const data = await response.json();
             // Decrement immediately after getting full response
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
+
+            // Log token usage from non-stream response
+            // Anthropic format: data.usage.input_tokens / output_tokens
+            // OpenAI format: data.usage.prompt_tokens / completion_tokens
+            if (data.usage) {
+                const inputTokens = data.usage.input_tokens || data.usage.prompt_tokens || 0;
+                const outputTokens = data.usage.output_tokens || data.usage.completion_tokens || 0;
+                console.log('[PROXY] Token usage (non-stream):', {
+                    key: userToken.substring(0, 8) + '...',
+                    input_tokens: inputTokens,
+                    output_tokens: outputTokens,
+                    total_tokens: inputTokens + outputTokens,
+                    source: activeSource!.name
+                });
+            }
 
             // Increment usage after successful non-stream response
             if (shouldCountUsage) {
