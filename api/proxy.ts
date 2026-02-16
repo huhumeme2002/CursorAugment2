@@ -377,7 +377,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         apiBase: defaultApiBase,
                         apiKey: defaultApiKey,
                         modelActual: settings?.model_actual,
-                        name: 'Default API'
+                        name: 'Default API',
+                        systemPromptFormat: settings?.system_prompt_format
                     };
                     concurrencyIdToDecrement = 'default';
                     console.log(`[PROXY] ✅ Using DEFAULT API`);

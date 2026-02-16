@@ -41,6 +41,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             model_display: settings.model_display || 'Claude-Opus-4.5-VIP',
             model_actual: settings.model_actual || 'claude-3-5-haiku-20241022',
             system_prompt: settings.system_prompt || '',
+            system_prompt_format: settings.system_prompt_format || 'auto',
             configured: true
         });
     } catch (error) {

@@ -435,6 +435,7 @@ export interface ProxySettings {
     model_display: string;  // Model name shown to clients (e.g., "Claude-Opus-4.5-VIP")
     model_actual: string;   // Actual model to use (e.g., "claude-3-5-haiku-20241022")
     system_prompt?: string; // Optional system prompt to prepend to all requests
+    system_prompt_format?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message'; // How to inject system prompt for default server
     concurrency_limit?: number; // Max concurrent requests for default API
     models?: Record<string, ModelConfig>; // Per-model system prompts (e.g., {"gemini": {...}, "gpt5": {...}})
 }
@@ -506,7 +507,8 @@ export async function saveSettings(
     modelDisplay?: string,
     modelActual?: string,
     systemPrompt?: string,
-    concurrencyLimit?: number
+    concurrencyLimit?: number,
+    systemPromptFormat?: string
 ): Promise<boolean> {
     try {
         // Get existing settings first to preserve values if not provided
@@ -518,6 +520,7 @@ export async function saveSettings(
             model_display: modelDisplay || existing?.model_display || 'Claude-Opus-4.5-VIP',
             model_actual: modelActual || existing?.model_actual || 'claude-3-5-haiku-20241022',
             system_prompt: systemPrompt !== undefined ? systemPrompt : (existing?.system_prompt || ''),
+            system_prompt_format: (systemPromptFormat as ProxySettings['system_prompt_format']) || existing?.system_prompt_format || 'auto',
             concurrency_limit: concurrencyLimit !== undefined ? concurrencyLimit : (existing?.concurrency_limit),
             models: existing?.models || {}
         };

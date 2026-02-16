@@ -22,14 +22,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Parse body
-        const { api_url, api_key, model_display, model_actual, system_prompt, concurrency_limit } = req.body;
+        const { api_url, api_key, model_display, model_actual, system_prompt, concurrency_limit, system_prompt_format } = req.body;
 
         if (!api_url || !api_key) {
             return res.status(400).json({ error: 'api_url and api_key are required' });
         }
 
         // Save settings to Redis (including optional model mapping and system prompt)
-        const success = await saveSettings(api_url, api_key, model_display, model_actual, system_prompt, concurrency_limit);
+        const success = await saveSettings(api_url, api_key, model_display, model_actual, system_prompt, concurrency_limit, system_prompt_format);
 
         if (!success) {
             return res.status(500).json({ error: 'Failed to save settings' });

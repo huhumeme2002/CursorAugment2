@@ -508,6 +508,12 @@ async function loadSettings() {
             systemPromptInput.value = data.system_prompt;
         }
 
+        // Load system prompt format
+        const systemPromptFormatInput = document.getElementById('systemPromptFormatInput');
+        if (systemPromptFormatInput) {
+            systemPromptFormatInput.value = data.system_prompt_format || 'auto';
+        }
+
         // Load concurrency limit
         const concurrencyLimitInput = document.getElementById('concurrencyLimitInput');
         if (data.concurrency_limit && concurrencyLimitInput) {
@@ -534,6 +540,7 @@ settingsForm.addEventListener('submit', async (e) => {
     const modelActual = modelActualInput.value.trim() || 'claude-3-5-haiku-20241022';
     const systemPromptInput = document.getElementById('systemPromptInput');
     const systemPrompt = systemPromptInput ? systemPromptInput.value.trim() : '';
+    const systemPromptFormat = document.getElementById('systemPromptFormatInput')?.value || 'auto';
 
     const concurrencyLimit = parseInt(document.getElementById('concurrencyLimitInput').value) || 100;
 
@@ -562,6 +569,7 @@ settingsForm.addEventListener('submit', async (e) => {
                 model_display: modelDisplay,
                 model_actual: modelActual,
                 system_prompt: systemPrompt,
+                system_prompt_format: systemPromptFormat,
                 concurrency_limit: concurrencyLimit
             })
         });
