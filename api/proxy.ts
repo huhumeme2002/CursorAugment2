@@ -331,7 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             modelActual?: string;
             name: string;
             disableSystemPromptInjection?: boolean;
-            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both';
+            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message';
         } | null = null;
 
         let concurrencyIdToDecrement: string | null = null;
@@ -550,6 +550,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // Determine which formats to use based on profile setting
             let useAnthropic = false;
             let useOpenAI = false;
+            let useUserMessage = false;
 
             if (formatSetting === 'anthropic') {
                 useAnthropic = true;
@@ -558,6 +559,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             } else if (formatSetting === 'both') {
                 useAnthropic = true;
                 useOpenAI = true;
+            } else if (formatSetting === 'user_message') {
+                useUserMessage = true;
             } else {
                 // auto: use existing detection logic
                 if (autoDetectedAnthropic) {
@@ -584,6 +587,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
             } else if (useOpenAI) {
                 injectionMethods.push('openai:skipped_no_messages_array');
+            }
+
+            if (useUserMessage && requestBody.messages && Array.isArray(requestBody.messages)) {
+                // Remove existing system messages to avoid conflicts
+                if (existingSystemInMessages) {
+                    requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
+                    injectionMethods.push('user_message:removed_existing_system_messages');
+                }
+                // Remove top-level system field if present
+                if ('system' in requestBody) {
+                    delete requestBody.system;
+                }
+                const wrappedContent = `[System Instructions]\n${systemPrompt}\n[End System Instructions]`;
+                requestBody.messages.unshift({ role: 'user', content: wrappedContent });
+                injectionMethods.push('user_message:prepended_as_user_role');
+            } else if (useUserMessage) {
+                injectionMethods.push('user_message:skipped_no_messages_array');
             }
 
             if (injectionMethods.length === 0) {

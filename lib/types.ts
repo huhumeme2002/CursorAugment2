@@ -42,7 +42,7 @@ export interface APIProfile {
     description?: string;
     is_active: boolean;     // Whether this profile is available for selection
     disable_system_prompt_injection?: boolean; // If true, skip system prompt injection for this profile
-    system_prompt_format?: 'auto' | 'anthropic' | 'openai' | 'both'; // How to inject system prompt (default: auto)
+    system_prompt_format?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message'; // How to inject system prompt (default: auto)
 }
 
 // Model configuration for per-model system prompts
