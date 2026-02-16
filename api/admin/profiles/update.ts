@@ -9,7 +9,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        const { id, name, api_key, api_url, model_actual, capabilities, speed, description, is_active } = req.body;
+        const { id, name, api_key, api_url, model_actual, capabilities, speed, description, is_active, disable_system_prompt_injection, system_prompt_format } = req.body;
 
         if (!id) {
             return res.status(400).json({ error: 'Profile ID is required' });
@@ -29,7 +29,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             capabilities: capabilities !== undefined ? capabilities : existingProfile.capabilities,
             speed: speed || existingProfile.speed,
             description: description !== undefined ? description : existingProfile.description,
-            is_active: is_active !== undefined ? is_active : existingProfile.is_active
+            is_active: is_active !== undefined ? is_active : existingProfile.is_active,
+            disable_system_prompt_injection: disable_system_prompt_injection !== undefined ? disable_system_prompt_injection : existingProfile.disable_system_prompt_injection,
+            system_prompt_format: system_prompt_format !== undefined ? system_prompt_format : existingProfile.system_prompt_format
         };
 
         const success = await saveAPIProfile(updatedProfile);

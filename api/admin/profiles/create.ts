@@ -10,7 +10,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        const { name, api_key, api_url, model_actual, capabilities, speed, description, is_active } = req.body;
+        const { name, api_key, api_url, model_actual, capabilities, speed, description, is_active, disable_system_prompt_injection, system_prompt_format } = req.body;
 
         if (!name || !api_key || !api_url) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -25,7 +25,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             capabilities: Array.isArray(capabilities) ? capabilities : [],
             speed: speed || 'medium',
             description: description || '',
-            is_active: is_active !== undefined ? is_active : true
+            is_active: is_active !== undefined ? is_active : true,
+            disable_system_prompt_injection: disable_system_prompt_injection || false,
+            system_prompt_format: system_prompt_format || 'auto'
         };
 
         const success = await saveAPIProfile(newProfile);

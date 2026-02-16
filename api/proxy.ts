@@ -331,6 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             modelActual?: string;
             name: string;
             disableSystemPromptInjection?: boolean;
+            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both';
         } | null = null;
 
         let concurrencyIdToDecrement: string | null = null;
@@ -350,7 +351,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     apiKey: profile.api_key,
                     modelActual: profile.model_actual,
                     name: `Profile: ${profile.name}`,
-                    disableSystemPromptInjection: profile.disable_system_prompt_injection
+                    disableSystemPromptInjection: profile.disable_system_prompt_injection,
+                    systemPromptFormat: profile.system_prompt_format
                 };
                 console.log(`[PROXY] Using User Selected Profile: ${profile.name}`);
             } else {
@@ -541,32 +543,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         if (systemPrompt && !shouldBypassSystemPrompt) {
-            const isAnthropic = 'system' in requestBody || clientPath.includes('/messages');
+            const formatSetting = activeSource.systemPromptFormat || 'auto';
+            const autoDetectedAnthropic = 'system' in requestBody || clientPath.includes('/messages');
             const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
 
-            let injectionMethod: string;
-            if (isAnthropic) {
+            // Determine which formats to use based on profile setting
+            let useAnthropic = false;
+            let useOpenAI = false;
+
+            if (formatSetting === 'anthropic') {
+                useAnthropic = true;
+            } else if (formatSetting === 'openai') {
+                useOpenAI = true;
+            } else if (formatSetting === 'both') {
+                useAnthropic = true;
+                useOpenAI = true;
+            } else {
+                // auto: use existing detection logic
+                if (autoDetectedAnthropic) {
+                    useAnthropic = true;
+                } else {
+                    useOpenAI = true;
+                }
+            }
+
+            let injectionMethods: string[] = [];
+
+            if (useAnthropic) {
                 requestBody.system = systemPrompt;
-                injectionMethod = 'anthropic:requestBody.system';
-            } else if (requestBody.messages && Array.isArray(requestBody.messages)) {
+                injectionMethods.push('anthropic:requestBody.system');
+            }
+
+            if (useOpenAI && requestBody.messages && Array.isArray(requestBody.messages)) {
                 if (existingSystemInMessages) {
                     requestBody.messages = requestBody.messages.map((msg: any) => msg.role === 'system' ? { role: 'system', content: systemPrompt } : msg);
-                    injectionMethod = 'openai:replaced_existing_system_message';
+                    injectionMethods.push('openai:replaced_existing_system_message');
                 } else {
                     requestBody.messages.unshift({ role: 'system', content: systemPrompt });
-                    injectionMethod = 'openai:prepended_new_system_message';
+                    injectionMethods.push('openai:prepended_new_system_message');
                 }
-            } else {
-                injectionMethod = 'none:no_messages_array';
+            } else if (useOpenAI) {
+                injectionMethods.push('openai:skipped_no_messages_array');
+            }
+
+            if (injectionMethods.length === 0) {
+                injectionMethods.push('none:no_target');
             }
 
             console.log('[PROXY] [SYSPROMPT] ✅ Injected:', {
-                method: injectionMethod,
+                format: formatSetting,
+                methods: injectionMethods,
                 source: systemPromptSource,
                 promptLength: systemPrompt.length,
                 promptPreview: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
                 clientPath,
-                isAnthropic,
+                autoDetectedAnthropic,
                 hadExistingSystemMsg: !!existingSystemInMessages
             });
         } else if (!systemPrompt) {

@@ -1295,6 +1295,8 @@ window.openProfileModal = function (profileId = null) {
     document.getElementById('profileStatus').value = 'true';
     document.getElementById('profileCapabilities').value = '';
     document.getElementById('profileDescription').value = '';
+    document.getElementById('profileSystemPromptFormat').value = 'auto';
+    document.getElementById('profileDisableSystemPrompt').value = 'false';
 
     if (profileId && window.currentProfiles && window.currentProfiles[profileId]) {
         const p = window.currentProfiles[profileId];
@@ -1310,6 +1312,8 @@ window.openProfileModal = function (profileId = null) {
         document.getElementById('profileStatus').value = p.is_active.toString();
         document.getElementById('profileCapabilities').value = (p.capabilities || []).join(', ');
         document.getElementById('profileDescription').value = p.description || '';
+        document.getElementById('profileSystemPromptFormat').value = p.system_prompt_format || 'auto';
+        document.getElementById('profileDisableSystemPrompt').value = (p.disable_system_prompt_injection || false).toString();
     } else {
         editingProfileId = null;
         title.textContent = 'New Profile';
@@ -1343,6 +1347,8 @@ window.saveProfile = async function () {
     const is_active = document.getElementById('profileStatus').value === 'true';
     const capabilities = document.getElementById('profileCapabilities').value.split(',').map(s => s.trim()).filter(s => s);
     const description = document.getElementById('profileDescription').value.trim();
+    const system_prompt_format = document.getElementById('profileSystemPromptFormat').value;
+    const disable_system_prompt_injection = document.getElementById('profileDisableSystemPrompt').value === 'true';
     const id = document.getElementById('profileId').value.trim();
 
     if (!name || !api_url || !api_key) {
@@ -1351,7 +1357,7 @@ window.saveProfile = async function () {
     }
 
     const payload = {
-        name, api_url, api_key, model_actual, speed, is_active, capabilities, description
+        name, api_url, api_key, model_actual, speed, is_active, capabilities, description, system_prompt_format, disable_system_prompt_injection
     };
 
     const endpoint = id ? `${API_BASE}/admin/profiles/update` : `${API_BASE}/admin/profiles/create`;
