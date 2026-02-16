@@ -70,16 +70,12 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Messages Passthrough**: Forwards the entire messages array unchanged (no filtering/truncation)
 - **Conversation Turn-Based Usage Counting** (CRITICAL - Updated 2026-02-13):
   - **Problem**: Claude Code makes 5-10 API calls per user prompt (tool use, parallel calls), causing usage to increment 5-10x
-  - **Solution**: Groups requests from same prompt within 60-second window as one conversation turn
+  - **Solution**: Groups requests from same client within 60-second window as one conversation turn
   - **Implementation**:
-    - Conversation ID = `${clientIP}:${userAgent}:${messageHash}` (client fingerprint + message content)
-    - Message hash = first 50 chars + length of last user message
+    - Conversation ID = `${clientIP}:${userAgent.substring(0, 50)}` (client fingerprint only, no message hash)
+    - Message hash was removed because Claude Opus dynamically modifies message content (adds suggestions, logs, etc.), causing hash-based detection to miscount
     - Requests within 60s window with same conversation ID = same turn (only first increments usage)
-    - **Key insight**: Different prompts have different message content → different conversation IDs → counted separately
-    - This solves both problems:
-      - ✅ Multiple tool calls for same prompt = 1 usage (same message hash)
-      - ✅ New prompt after 30s = new usage (different message hash)
-      - ✅ Long prompts (>60s) = still 1 usage (same message hash throughout)
+    - Turn separation relies on the 60s time window expiring between distinct user prompts
     - Usage incremented AFTER successful response (not before validation)
     - Only counts actual user messages: checks `role: "user"` and content is not `tool_result`
     - Excludes metadata endpoints: `/count_tokens` does NOT increment usage
@@ -99,14 +95,14 @@ Client → server.ts (Express, dynamic routing) → Authentication → api/proxy
 - **Cache Invalidation**: Admin save endpoints must call the appropriate cache clear functions after writes
 - **Conversation Turn Tracking**:
   - `last_request_timestamp`: Unix timestamp (ms) of last request
-  - `last_conversation_id`: Client fingerprint + message hash for grouping requests into conversation turns
+  - `last_conversation_id`: Client fingerprint for grouping requests into conversation turns
   - 60-second window: Requests within this window with same conversation ID are treated as one turn
-  - Conversation ID includes message content hash to distinguish different prompts from same client
+  - Conversation ID uses client IP + truncated user agent (message hash was removed — see proxy.ts comments)
 - **Usage Functions**:
   - `checkUsageLimit(keyName)`: Check quota without incrementing (for pre-validation)
   - `incrementUsage(keyName, conversationId?)`: Increment usage counter (call ONLY after successful response)
     - If `conversationId` provided and matches previous request within 60s, skips increment
-    - Conversation ID format: `${clientIP}:${userAgent}:${messageHash}`
+    - Conversation ID format: `${clientIP}:${userAgent.substring(0, 50)}`
     - Returns `{ allowed, currentUsage, limit, shouldIncrement, reason? }`
 
 ### Redis Key Schema
@@ -227,8 +223,8 @@ When modifying usage counting logic:
 1. **NEVER increment usage before validation** - Always validate request first, increment only after successful upstream response
 2. **Exclude metadata endpoints** - Endpoints like `/count_tokens`, `/health`, `/status` should never increment usage
 3. **Handle failures correctly** - 4xx/5xx responses should NOT consume user quota
-4. **Use conversation turn detection** - Pass `conversationId` (format: `${clientIP}:${userAgent}:${messageHash}`) to `incrementUsage()` to group requests within 60s window
-5. **Understand the conversation ID** - Includes message content hash to distinguish different prompts from same client, solving both duplicate counting and prompt separation issues
+4. **Use conversation turn detection** - Pass `conversationId` (format: `${clientIP}:${userAgent.substring(0, 50)}`) to `incrementUsage()` to group requests within 60s window
+5. **Understand the conversation ID** - Uses client fingerprint only (IP + truncated user agent). Message hash was removed because Claude Opus dynamically modifies content. Turn separation relies on the 60s time window.
 6. **Test with Claude Code** - Verify that 1 user prompt = 1 usage increment, even with multiple tool calls or long execution times
 7. **Monitor logs** - Check for `[USAGE] Skipping increment - same conversation turn` messages to verify turn detection works
 

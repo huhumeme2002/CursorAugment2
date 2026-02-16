@@ -492,18 +492,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         let systemPrompt = settings?.system_prompt;
         const keySelectedModel = keyData.selected_model;
+        let systemPromptSource = systemPrompt ? 'global' : 'none';
+
         if (keySelectedModel && settings?.models?.[keySelectedModel]) {
             systemPrompt = settings.models[keySelectedModel].system_prompt;
+            systemPromptSource = systemPrompt ? `model:${keySelectedModel}` : systemPromptSource;
         }
+
+        console.log('[PROXY] [SYSPROMPT] Source resolution:', {
+            source: systemPromptSource,
+            selectedModel: keySelectedModel || '(none)',
+            hasGlobalPrompt: !!settings?.system_prompt,
+            hasModelPrompt: !!(keySelectedModel && settings?.models?.[keySelectedModel]?.system_prompt),
+            availableModelConfigs: settings?.models ? Object.keys(settings.models) : [],
+            rawLength: systemPrompt ? String(systemPrompt).length : 0
+        });
 
         // ... (Existing System Prompt Injection Checks) ...
         if (systemPrompt && typeof systemPrompt === 'string') {
             systemPrompt = systemPrompt.trim();
             if (!systemPrompt) {
+                console.log('[PROXY] [SYSPROMPT] Prompt was whitespace-only, discarded');
                 systemPrompt = undefined;
             } else {
                 const MAX_SYSTEM_PROMPT_LENGTH = 10000;
                 if (systemPrompt.length > MAX_SYSTEM_PROMPT_LENGTH) {
+                    console.log(`[PROXY] [SYSPROMPT] Truncated: ${systemPrompt.length} → ${MAX_SYSTEM_PROMPT_LENGTH} chars`);
                     systemPrompt = systemPrompt.substring(0, MAX_SYSTEM_PROMPT_LENGTH);
                 }
             }
@@ -512,31 +526,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Check if we should bypass system prompt injection for supperapi.store
         const shouldBypassSystemPrompt = apiBase.includes('supperapi.store') || activeSource.disableSystemPromptInjection;
 
-        console.log('[PROXY] System prompt check:', {
-            apiBase,
+        console.log('[PROXY] [SYSPROMPT] Bypass check:', {
             shouldBypass: shouldBypassSystemPrompt,
-            hasSystemPrompt: !!systemPrompt,
-            profileDisabled: activeSource.disableSystemPromptInjection,
-            supperapiBypass: apiBase.includes('supperapi.store')
+            reason: shouldBypassSystemPrompt
+                ? (apiBase.includes('supperapi.store') ? 'supperapi.store URL' : 'profile.disable_system_prompt_injection=true')
+                : 'N/A',
+            apiBase,
+            profileId: activeSource.id,
+            profileName: activeSource.name
         });
 
         if (shouldBypassSystemPrompt) {
-            console.log('[PROXY] ✅ Bypassing system prompt injection (Reason:',
-                apiBase.includes('supperapi.store') ? 'supperapi.store URL' : 'profile configuration', ')');
+            console.log('[PROXY] [SYSPROMPT] ✅ Bypassed — no injection performed');
         }
 
         if (systemPrompt && !shouldBypassSystemPrompt) {
             const isAnthropic = 'system' in requestBody || clientPath.includes('/messages');
+            const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
+
+            let injectionMethod: string;
             if (isAnthropic) {
                 requestBody.system = systemPrompt;
+                injectionMethod = 'anthropic:requestBody.system';
             } else if (requestBody.messages && Array.isArray(requestBody.messages)) {
-                const hasSystemMessage = requestBody.messages.some((msg: any) => msg.role === 'system');
-                if (hasSystemMessage) {
+                if (existingSystemInMessages) {
                     requestBody.messages = requestBody.messages.map((msg: any) => msg.role === 'system' ? { role: 'system', content: systemPrompt } : msg);
+                    injectionMethod = 'openai:replaced_existing_system_message';
                 } else {
                     requestBody.messages.unshift({ role: 'system', content: systemPrompt });
+                    injectionMethod = 'openai:prepended_new_system_message';
                 }
+            } else {
+                injectionMethod = 'none:no_messages_array';
             }
+
+            console.log('[PROXY] [SYSPROMPT] ✅ Injected:', {
+                method: injectionMethod,
+                source: systemPromptSource,
+                promptLength: systemPrompt.length,
+                promptPreview: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
+                clientPath,
+                isAnthropic,
+                hadExistingSystemMsg: !!existingSystemInMessages
+            });
+        } else if (!systemPrompt) {
+            console.log('[PROXY] [SYSPROMPT] ⏭️ No system prompt configured — skipping injection');
         }
 
 
