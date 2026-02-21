@@ -19,8 +19,9 @@ npm install                # Install dependencies
 npm run dev:server         # Local Express server (recommended for dev)
 npm run dev                # Vercel dev environment (simulates serverless)
 npm start                  # Production Express server (same as dev:server)
-npx tsc --noEmit           # TypeScript type checking
+npx tsc --noEmit           # TypeScript type checking (only checks api/ and lib/ — server.ts is excluded)
 npm run deploy             # Deploy to Vercel production (or: vercel --prod)
+# Note: `npm run build` is a no-op — Vercel handles TS compilation. There is no local build step.
 
 # API key management (CLI scripts)
 npm run key:create         # Create a new API key
@@ -119,7 +120,7 @@ metrics:*                  → Performance metrics
 
 ### Core Types (`lib/types.ts`)
 - `RedisKeyData`: API key with `expiry`, `daily_limit`, `usage_today: { date, count }`, `selected_model`, `selected_api_profile_id`, `last_request_timestamp`, `last_conversation_id`
-- `APIProfile`: Backend config with `api_key`, `api_url`, `model_actual`, `capabilities`, `is_active`, `disable_system_prompt_injection`
+- `APIProfile`: Backend config with `api_key`, `api_url`, `model_actual`, `capabilities`, `is_active`, `disable_system_prompt_injection`, `system_prompt_format` ('auto'|'anthropic'|'openai'|'both'|'user_message')
 - `BackupProfile`: Extends APIProfile concept with `concurrency_limit` for waterfall system
 - `Announcement`: System notifications with `type` (info/warning/error/success), `priority`, time-based activation
 - `ModelConfig`: Per-model configuration with `system_prompt` (max 10K chars), stored as `model_config:{model_name}` in Redis

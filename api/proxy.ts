@@ -526,13 +526,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
         }
 
-        // Check if we should bypass system prompt injection for supperapi.store
-        const shouldBypassSystemPrompt = apiBase.includes('supperapi.store') || activeSource.disableSystemPromptInjection;
+        // Check if we should bypass system prompt injection
+        const shouldBypassSystemPrompt = activeSource.disableSystemPromptInjection;
 
         console.log('[PROXY] [SYSPROMPT] Bypass check:', {
             shouldBypass: shouldBypassSystemPrompt,
             reason: shouldBypassSystemPrompt
-                ? (apiBase.includes('supperapi.store') ? 'supperapi.store URL' : 'profile.disable_system_prompt_injection=true')
+                ? 'profile.disable_system_prompt_injection=true'
                 : 'N/A',
             apiBase,
             profileId: activeSource.id,
