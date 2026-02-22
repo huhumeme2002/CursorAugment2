@@ -620,14 +620,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 const firstUserIdx = requestBody.messages.findIndex((msg: any) => msg.role === 'user');
                 if (firstUserIdx !== -1) {
                     const firstMsg = requestBody.messages[firstUserIdx];
-                    const originalContent = typeof firstMsg.content === 'string'
-                        ? firstMsg.content
-                        : JSON.stringify(firstMsg.content);
-                    requestBody.messages[firstUserIdx] = {
-                        ...firstMsg,
-                        content: `[System Instructions]\n${systemPrompt}\n[End System Instructions]\n\n${originalContent}`
-                    };
-                    injectionMethods.push('inject_first_user:merged_into_first_user_message');
+                    const prefix = `[System Instructions]\n${systemPrompt}\n[End System Instructions]\n\n`;
+                    if (Array.isArray(firstMsg.content)) {
+                        // Anthropic format: content is array of blocks — prepend as a text block
+                        requestBody.messages[firstUserIdx] = {
+                            ...firstMsg,
+                            content: [{ type: 'text', text: prefix }, ...firstMsg.content]
+                        };
+                        injectionMethods.push('inject_first_user:prepended_text_block_to_array');
+                    } else {
+                        requestBody.messages[firstUserIdx] = {
+                            ...firstMsg,
+                            content: `${prefix}${firstMsg.content ?? ''}`
+                        };
+                        injectionMethods.push('inject_first_user:merged_into_first_user_message');
+                    }
                 } else {
                     injectionMethods.push('inject_first_user:skipped_no_user_message_found');
                 }
