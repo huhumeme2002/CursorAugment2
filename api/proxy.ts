@@ -331,7 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             modelActual?: string;
             name: string;
             disableSystemPromptInjection?: boolean;
-            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message';
+            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message' | 'inject_first_user';
         } | null = null;
 
         let concurrencyIdToDecrement: string | null = null;
@@ -552,6 +552,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let useAnthropic = false;
             let useOpenAI = false;
             let useUserMessage = false;
+            let useInjectFirstUser = false;
 
             if (formatSetting === 'anthropic') {
                 useAnthropic = true;
@@ -562,6 +563,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 useOpenAI = true;
             } else if (formatSetting === 'user_message') {
                 useUserMessage = true;
+            } else if (formatSetting === 'inject_first_user') {
+                useInjectFirstUser = true;
             } else {
                 // auto: use existing detection logic
                 if (autoDetectedAnthropic) {
@@ -605,6 +608,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 injectionMethods.push('user_message:prepended_as_user_role');
             } else if (useUserMessage) {
                 injectionMethods.push('user_message:skipped_no_messages_array');
+            }
+
+            if (useInjectFirstUser && requestBody.messages && Array.isArray(requestBody.messages)) {
+                // Remove top-level system field and any system messages
+                if ('system' in requestBody) delete requestBody.system;
+                if (existingSystemInMessages) {
+                    requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
+                }
+                // Find first user message and prepend system prompt to its content
+                const firstUserIdx = requestBody.messages.findIndex((msg: any) => msg.role === 'user');
+                if (firstUserIdx !== -1) {
+                    const firstMsg = requestBody.messages[firstUserIdx];
+                    const originalContent = typeof firstMsg.content === 'string'
+                        ? firstMsg.content
+                        : JSON.stringify(firstMsg.content);
+                    requestBody.messages[firstUserIdx] = {
+                        ...firstMsg,
+                        content: `[System Instructions]\n${systemPrompt}\n[End System Instructions]\n\n${originalContent}`
+                    };
+                    injectionMethods.push('inject_first_user:merged_into_first_user_message');
+                } else {
+                    injectionMethods.push('inject_first_user:skipped_no_user_message_found');
+                }
+            } else if (useInjectFirstUser) {
+                injectionMethods.push('inject_first_user:skipped_no_messages_array');
             }
 
             if (injectionMethods.length === 0) {

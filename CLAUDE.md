@@ -23,9 +23,9 @@ npx tsc --noEmit           # TypeScript type checking (only checks api/ and lib/
 npm run deploy             # Deploy to Vercel production (or: vercel --prod)
 # Note: `npm run build` is a no-op — Vercel handles TS compilation. There is no local build step.
 
-# API key management (CLI scripts)
-npm run key:create         # Create a new API key
-npm run key:list           # List all API keys
+# API key management (CLI scripts — use admin panel or api/admin/keys/create.ts instead)
+npm run key:create         # Create a new API key (WARNING: uses legacy IP-based schema)
+npm run key:list           # List all API keys (WARNING: uses legacy IP-based schema)
 npm run key:delete         # Delete an API key
 
 # PM2 production (uses ecosystem.config.js - cluster mode, all CPU cores)
@@ -205,6 +205,14 @@ Manual testing only:
 4. Test proxy: `POST /api/v1/chat/completions` with `Authorization: Bearer <key>`
 5. Trace requests via `X-Correlation-ID` response header
 6. Debug scripts: `debug-key.js` (direct Redis), `debug-key-via-api.js` (via API)
+
+## Gotchas
+
+- **Legacy scripts**: `scripts/create-key.js`, `scripts/list-keys.js`, and `debug-key.js` (root) use the old IP/activation-based schema. Don't use them to create or inspect production keys — use the admin panel or `api/admin/keys/` endpoints instead.
+- **Unauthenticated admin endpoints**: `GET /api/admin/concurrency-status` and `POST /api/admin/reset-concurrency` have no auth checks — anyone can call them.
+- **Debug key endpoint**: `GET /api/debug-key?key=<name>` (no auth) returns raw key state including quota, usage, and limit status. Useful for debugging but also unauthenticated.
+- **Root URL**: `public/index.html` immediately redirects to `/admin` — the app has no public landing page.
+- **README.md is outdated**: Written in Vietnamese and describes the legacy activation-based schema. Ignore it for current architecture.
 
 ## Troubleshooting
 
