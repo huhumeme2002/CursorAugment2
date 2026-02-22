@@ -831,6 +831,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
                     let chunk = decoder.decode(value, { stream: true });
 
+                    // DEBUG: log raw upstream chunks
+                    console.log('[PROXY] [STREAM_DEBUG] raw chunk:', JSON.stringify(chunk.substring(0, 500)));
+
                     // Extract token usage from SSE stream events
                     // Anthropic: message_delta with usage, or message_start with usage
                     // OpenAI: final chunk with usage field
