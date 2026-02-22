@@ -331,7 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             modelActual?: string;
             name: string;
             disableSystemPromptInjection?: boolean;
-            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message' | 'inject_first_user';
+            systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message' | 'inject_first_user' | 'disabled';
         } | null = null;
 
         let concurrencyIdToDecrement: string | null = null;
@@ -545,6 +545,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (systemPrompt && !shouldBypassSystemPrompt) {
             const formatSetting = activeSource.systemPromptFormat || 'auto';
+
+            if (formatSetting === 'disabled') {
+                console.log('[PROXY] [SYSPROMPT] ⏭️ Skipped — format set to disabled');
+            } else {
             const autoDetectedAnthropic = 'system' in requestBody || clientPath.includes('/messages');
             const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
 
@@ -656,6 +660,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 autoDetectedAnthropic,
                 hadExistingSystemMsg: !!existingSystemInMessages
             });
+            } // end else (formatSetting !== 'disabled')
         } else if (!systemPrompt) {
             console.log('[PROXY] [SYSPROMPT] ⏭️ No system prompt configured — skipping injection');
         }
