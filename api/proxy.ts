@@ -118,7 +118,7 @@ function rewriteSSEChunk(chunk: string, actualModel: string, displayModel: strin
  * @param clientPath - Path from client request (e.g., "/v1/chat/completions" or "/v1/messages")
  * @returns Final upstream URL
  */
-function buildUpstreamUrl(apiBase: string, clientPath: string): string {
+function buildUpstreamUrl(apiBase: string, clientPath: string, clientQuery?: string): string {
     // Remove trailing slash from base
     if (apiBase.endsWith('/')) {
         apiBase = apiBase.slice(0, -1);
@@ -137,6 +137,11 @@ function buildUpstreamUrl(apiBase: string, clientPath: string): string {
     } else {
         // Base doesn't have /v1, append full client path
         finalUrl = `${apiBase}${clientPath}`;
+    }
+
+    // Forward query params from client (e.g. ?beta=true)
+    if (clientQuery && clientQuery !== '?') {
+        finalUrl += clientQuery;
     }
 
     return finalUrl;
@@ -172,7 +177,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         // Get client path from request URL
-        const clientPath = req.url || '/v1/chat/completions';
+        const rawUrl = req.url || '/v1/chat/completions';
+        const qIdx = rawUrl.indexOf('?');
+        const clientPath = qIdx !== -1 ? rawUrl.slice(0, qIdx) : rawUrl;
+        const clientQuery = qIdx !== -1 ? rawUrl.slice(qIdx) : '';
 
         logInfo('Proxy request started', {
             correlationId,
@@ -454,7 +462,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         console.log(`[PROXY] Final Source: ${activeSource.name}`);
 
-        const apiUrl = buildUpstreamUrl(apiBase, clientPath);
+        const apiUrl = buildUpstreamUrl(apiBase, clientPath, clientQuery);
         console.log('[PROXY] Final upstream URL:', apiUrl);
 
 
@@ -581,8 +589,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let injectionMethods: string[] = [];
 
             if (useAnthropic) {
-                requestBody.system = systemPrompt;
-                injectionMethods.push('anthropic:requestBody.system');
+                // If existing system is already an array, append our prompt as a text block
+                // Otherwise set as array format (required by some upstreams like supperapi.store)
+                if (Array.isArray(requestBody.system)) {
+                    requestBody.system = [...requestBody.system, { type: 'text', text: systemPrompt }];
+                    injectionMethods.push('anthropic:requestBody.system_array_appended');
+                } else {
+                    requestBody.system = [{ type: 'text', text: systemPrompt }];
+                    injectionMethods.push('anthropic:requestBody.system_array');
+                }
             }
 
             if (useOpenAI && requestBody.messages && Array.isArray(requestBody.messages)) {
@@ -691,10 +706,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     'Authorization': `Bearer ${apiKey}`,
                     'Accept': 'text/event-stream',
                     'Connection': 'keep-alive',
-                    // Claude Code identification headers - helps upstream API recognize this as Claude Code
-                    'User-Agent': 'claude-code/1.0.42',
-                    'anthropic-client-version': '1.0.42',
                     'x-api-key': apiKey,
+                    // Forward Anthropic/client headers if present
+                    ...(req.headers['anthropic-version'] && { 'anthropic-version': req.headers['anthropic-version'] as string }),
+                    ...(req.headers['anthropic-beta'] && { 'anthropic-beta': req.headers['anthropic-beta'] as string }),
+                    ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] as string }),
+                    ...(req.headers['x-app'] && { 'x-app': req.headers['x-app'] as string }),
+                    ...(req.headers['x-stainless-lang'] && { 'x-stainless-lang': req.headers['x-stainless-lang'] as string }),
+                    ...(req.headers['x-stainless-os'] && { 'x-stainless-os': req.headers['x-stainless-os'] as string }),
+                    ...(req.headers['x-stainless-arch'] && { 'x-stainless-arch': req.headers['x-stainless-arch'] as string }),
+                    ...(req.headers['x-stainless-runtime'] && { 'x-stainless-runtime': req.headers['x-stainless-runtime'] as string }),
+                    ...(req.headers['x-stainless-runtime-version'] && { 'x-stainless-runtime-version': req.headers['x-stainless-runtime-version'] as string }),
+                    ...(req.headers['x-stainless-package-version'] && { 'x-stainless-package-version': req.headers['x-stainless-package-version'] as string }),
+                    ...(req.headers['anthropic-dangerous-direct-browser-access'] && { 'anthropic-dangerous-direct-browser-access': req.headers['anthropic-dangerous-direct-browser-access'] as string }),
                 },
                 body: JSON.stringify(requestBody),
                 signal: controller.signal,
