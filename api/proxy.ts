@@ -337,6 +337,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             apiBase: string;
             apiKey: string;
             modelActual?: string;
+            modelDisplay?: string;
             name: string;
             disableSystemPromptInjection?: boolean;
             systemPromptFormat?: 'auto' | 'anthropic' | 'openai' | 'both' | 'user_message' | 'inject_first_user' | 'disabled';
@@ -358,6 +359,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     apiBase: profile.api_url,
                     apiKey: profile.api_key,
                     modelActual: profile.model_actual,
+                    modelDisplay: profile.model_display,
                     name: `Profile: ${profile.name}`,
                     disableSystemPromptInjection: profile.disable_system_prompt_injection,
                     systemPromptFormat: profile.system_prompt_format
@@ -470,8 +472,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // 6. MODEL VALIDATION & TRANSFORMATION
         // ====================
 
-        // Transform model name using settings (prioritize profile's model_actual)
-        const modelDisplay = settings?.model_display || 'Claude-Opus-4.5-VIP';
+        // Transform model name (prioritize profile-specific, then global settings)
+        const modelDisplay = activeSource.modelDisplay || settings?.model_display || 'Claude-Opus-4.5-VIP';
         const modelActual = activeSource.modelActual || settings?.model_actual || 'claude-3-5-haiku-20241022';
 
         // ... (Existing metadata removal logic) ...
@@ -950,7 +952,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             metrics.recordRequest(req.url || '/unknown', true, duration);
 
             // Rewrite model names in response body (deep object traversal, case-insensitive)
-            const modifiedData = rewriteModelName(data, modelActual, displayModel);
+            const modifiedData = rewriteModelName(data, modelActual, modelDisplay);
 
             // Also rewrite response headers if they contain model info
             const responseHeaders: any = {};

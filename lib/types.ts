@@ -37,6 +37,7 @@ export interface APIProfile {
     api_key: string;        // The actual API key for this backend
     api_url: string;        // The endpoint URL
     model_actual?: string;  // The actual model name for this backend (overrides global model_actual)
+    model_display?: string; // The display model name for clients (e.g., "claude-opus-4-6")
     capabilities: string[]; // e.g. ["image", "tools"]
     speed: "fast" | "medium" | "slow";
     description?: string;
