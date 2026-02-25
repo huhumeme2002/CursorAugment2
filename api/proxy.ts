@@ -916,7 +916,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         } else {
             // Non-stream
-            const data = await response.json();
+            const data = await response.json() as any;
             // Decrement immediately after getting full response
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
 
@@ -956,7 +956,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // Also rewrite response headers if they contain model info
             const responseHeaders: any = {};
-            for (const [key, value] of Object.entries(response.headers.raw())) {
+            const rawHeaders: Record<string, string | string[]> = {};
+            response.headers.forEach((value: string | string[], key: string) => {
+                rawHeaders[key] = value;
+            });
+            for (const [key, value] of Object.entries(rawHeaders)) {
                 if (typeof value === 'string' && modelActual && modelDisplay) {
                     const regex = new RegExp(modelActual.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
                     responseHeaders[key] = value.replace(regex, modelDisplay);
