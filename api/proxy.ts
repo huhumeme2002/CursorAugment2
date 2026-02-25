@@ -972,7 +972,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // Set rewritten headers
             for (const [key, value] of Object.entries(responseHeaders)) {
                 if (key.toLowerCase() !== 'content-length' && key.toLowerCase() !== 'transfer-encoding') {
-                    res.setHeader(key, value);
+                    res.setHeader(key, value as string | string[]);
                 }
             }
 

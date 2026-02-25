@@ -1,8 +1,8 @@
 module.exports = {
     apps: [{
         name: "cursor-augment-proxy",
-        script: "./server.ts",
-        interpreter: "tsx",
+        script: "npx",
+        args: "tsx server.ts",
         instances: "max", // Use all CPU cores (since you have 4 cores!)
         exec_mode: "cluster",
         env: {
