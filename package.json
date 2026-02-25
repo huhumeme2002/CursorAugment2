@@ -5,9 +5,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "vercel dev",
-    "dev:server": "ts-node server.ts",
-    "build": "echo 'Vercel handles TypeScript automatically'",
-    "start": "ts-node server.ts",
+    "dev:server": "tsx server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
     "deploy": "vercel --prod",
     "key:create": "node -r dotenv/config scripts/create-key.js",
     "key:list": "node -r dotenv/config scripts/list-keys.js",
