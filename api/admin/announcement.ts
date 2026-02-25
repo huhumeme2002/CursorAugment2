@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { verifyToken } from '../../../lib/auth';
-import { getAnnouncements } from '../../../lib/redis';
+import { verifyToken } from '../../lib/auth';
+import { getAnnouncements } from '../../lib/redis';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Only allow GET
