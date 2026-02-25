@@ -14,7 +14,10 @@
         "resolveJsonModule": true,
         "moduleResolution": "node",
         "allowSyntheticDefaultImports": true,
-        "baseUrl": "."
+        "baseUrl": ".",
+        "paths": {
+            "*": ["*", "lib/*", "api/*"]
+        }
     },
     "include": [
         "api/**/*",
