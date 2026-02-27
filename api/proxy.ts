@@ -970,8 +970,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             // Set rewritten headers
+            // IMPORTANT: Skip content-encoding because response.json() already decompresses the body.
+            // Forwarding Content-Encoding: gzip with a decompressed body causes ZlibError on the client.
+            // Also skip content-length (body may have changed size) and transfer-encoding.
+            const SKIP_HEADERS = new Set(['content-length', 'transfer-encoding', 'content-encoding']);
             for (const [key, value] of Object.entries(responseHeaders)) {
-                if (key.toLowerCase() !== 'content-length' && key.toLowerCase() !== 'transfer-encoding') {
+                if (!SKIP_HEADERS.has(key.toLowerCase())) {
                     res.setHeader(key, value as string | string[]);
                 }
             }

@@ -18,24 +18,30 @@ CursorAugment2 is a TypeScript AI API proxy that routes requests to multiple bac
 npm install                # Install dependencies
 npm run dev:server         # Local Express server (recommended for dev)
 npm run dev                # Vercel dev environment (simulates serverless)
-npm start                  # Production Express server (same as dev:server)
-npx tsc --noEmit           # TypeScript type checking (only checks api/ and lib/ — server.ts is excluded)
+npm start                  # Production Express server (runs compiled dist/server.js)
+npm run build              # Compile TypeScript to dist/ (for production)
 npm run deploy             # Deploy to Vercel production (or: vercel --prod)
-# Note: `npm run build` is a no-op — Vercel handles TS compilation. There is no local build step.
-
-# API key management (CLI scripts — use admin panel or api/admin/keys/create.ts instead)
-npm run key:create         # Create a new API key (WARNING: uses legacy IP-based schema)
-npm run key:list           # List all API keys (WARNING: uses legacy IP-based schema)
-npm run key:delete         # Delete an API key
+# Note: For local dev with tsx, use `npm run dev:server` instead
 
 # PM2 production (uses ecosystem.config.js - cluster mode, all CPU cores)
 pm2 start ecosystem.config.js
 pm2 logs cursor-augment-proxy
 pm2 restart cursor-augment-proxy
 pm2 stop cursor-augment-proxy
+pm2 delete cursor-augment-proxy  # Remove from PM2
 ```
 
 No linting or formatting tools are configured (no eslint, prettier, or editorconfig).
+
+## Additional Documentation
+
+- `CODEBASE_INDEX.md` — Detailed codebase reference with data flow diagrams and database schemas
+- `FIX_403_FORBIDDEN.md` — Common 403 resolution steps
+- `NGINX_CONFIGURATION.md` — Reverse proxy setup
+- `SETTINGS_CACHE.md` — Cache management
+- `USAGE_COUNTING_FIX.md` — 2026-02-13 usage counting fix details
+- `INVESTIGATION_REPORT_CONTEXT_MEMORY.md` — Context/memory issue investigation
+- `.kiro/specs/` — Feature design documents and requirements
 
 No automated tests exist. Manual testing only — see Testing section below.
 
@@ -213,6 +219,11 @@ Manual testing only:
 - **Debug key endpoint**: `GET /api/debug-key?key=<name>` (no auth) returns raw key state including quota, usage, and limit status. Useful for debugging but also unauthenticated.
 - **Root URL**: `public/index.html` immediately redirects to `/admin` — the app has no public landing page.
 - **README.md is outdated**: Written in Vietnamese and describes the legacy activation-based schema. Ignore it for current architecture.
+
+## Project Documentation
+
+- `CODEBASE_INDEX.md` — Detailed codebase reference with data flow diagrams and database schemas
+- `.kiro/specs/` — Feature design documents (concurrent-usage-limit, fix-newcli-proxy)
 
 ## Troubleshooting
 
