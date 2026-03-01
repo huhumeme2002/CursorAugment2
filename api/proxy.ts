@@ -707,6 +707,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${apiKey}`,
                     'Accept': 'text/event-stream',
+                    'Accept-Encoding': 'identity',
                     'Connection': 'keep-alive',
                     'x-api-key': apiKey,
                     // Forward Anthropic/client headers if present
