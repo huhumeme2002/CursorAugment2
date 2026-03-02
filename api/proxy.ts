@@ -250,8 +250,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     hasType: content?.hasOwnProperty('type'),
                     typeValue: content?.type,
                     contentPreview: typeof content === 'string' ? content.substring(0, 100) :
-                                  Array.isArray(content) ? `array[${content.length}]` :
-                                  typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other',
+                        Array.isArray(content) ? `array[${content.length}]` :
+                            typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other',
                     // NEW: Check array items
                     arrayItemTypes: Array.isArray(content) ? content.map((item: any) => item?.type || 'no-type') : 'N/A',
                     firstItemPreview: Array.isArray(content) && content[0] ? JSON.stringify(content[0]).substring(0, 150) : 'N/A'
@@ -559,124 +559,124 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (formatSetting === 'disabled') {
                 console.log('[PROXY] [SYSPROMPT] ⏭️ Skipped — format set to disabled');
             } else {
-            const autoDetectedAnthropic = 'system' in requestBody || clientPath.includes('/messages');
-            const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
+                const autoDetectedAnthropic = 'system' in requestBody || clientPath.includes('/messages');
+                const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
 
-            // Determine which formats to use based on profile setting
-            let useAnthropic = false;
-            let useOpenAI = false;
-            let useUserMessage = false;
-            let useInjectFirstUser = false;
+                // Determine which formats to use based on profile setting
+                let useAnthropic = false;
+                let useOpenAI = false;
+                let useUserMessage = false;
+                let useInjectFirstUser = false;
 
-            if (formatSetting === 'anthropic') {
-                useAnthropic = true;
-            } else if (formatSetting === 'openai') {
-                useOpenAI = true;
-            } else if (formatSetting === 'both') {
-                useAnthropic = true;
-                useOpenAI = true;
-            } else if (formatSetting === 'user_message') {
-                useUserMessage = true;
-            } else if (formatSetting === 'inject_first_user') {
-                useInjectFirstUser = true;
-            } else {
-                // auto: use existing detection logic
-                if (autoDetectedAnthropic) {
+                if (formatSetting === 'anthropic') {
                     useAnthropic = true;
-                } else {
+                } else if (formatSetting === 'openai') {
                     useOpenAI = true;
-                }
-            }
-
-            let injectionMethods: string[] = [];
-
-            if (useAnthropic) {
-                // If existing system is already an array, append our prompt as a text block
-                // Otherwise set as array format (required by some upstreams like supperapi.store)
-                if (Array.isArray(requestBody.system)) {
-                    requestBody.system = [...requestBody.system, { type: 'text', text: systemPrompt }];
-                    injectionMethods.push('anthropic:requestBody.system_array_appended');
+                } else if (formatSetting === 'both') {
+                    useAnthropic = true;
+                    useOpenAI = true;
+                } else if (formatSetting === 'user_message') {
+                    useUserMessage = true;
+                } else if (formatSetting === 'inject_first_user') {
+                    useInjectFirstUser = true;
                 } else {
-                    requestBody.system = [{ type: 'text', text: systemPrompt }];
-                    injectionMethods.push('anthropic:requestBody.system_array');
-                }
-            }
-
-            if (useOpenAI && requestBody.messages && Array.isArray(requestBody.messages)) {
-                if (existingSystemInMessages) {
-                    requestBody.messages = requestBody.messages.map((msg: any) => msg.role === 'system' ? { role: 'system', content: systemPrompt } : msg);
-                    injectionMethods.push('openai:replaced_existing_system_message');
-                } else {
-                    requestBody.messages.unshift({ role: 'system', content: systemPrompt });
-                    injectionMethods.push('openai:prepended_new_system_message');
-                }
-            } else if (useOpenAI) {
-                injectionMethods.push('openai:skipped_no_messages_array');
-            }
-
-            if (useUserMessage && requestBody.messages && Array.isArray(requestBody.messages)) {
-                // Remove existing system messages to avoid conflicts
-                if (existingSystemInMessages) {
-                    requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
-                    injectionMethods.push('user_message:removed_existing_system_messages');
-                }
-                // Remove top-level system field if present
-                if ('system' in requestBody) {
-                    delete requestBody.system;
-                }
-                const wrappedContent = `[System Instructions]\n${systemPrompt}\n[End System Instructions]`;
-                requestBody.messages.unshift({ role: 'user', content: wrappedContent });
-                injectionMethods.push('user_message:prepended_as_user_role');
-            } else if (useUserMessage) {
-                injectionMethods.push('user_message:skipped_no_messages_array');
-            }
-
-            if (useInjectFirstUser && requestBody.messages && Array.isArray(requestBody.messages)) {
-                // Remove top-level system field and any system messages
-                if ('system' in requestBody) delete requestBody.system;
-                if (existingSystemInMessages) {
-                    requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
-                }
-                // Find first user message and prepend system prompt to its content
-                const firstUserIdx = requestBody.messages.findIndex((msg: any) => msg.role === 'user');
-                if (firstUserIdx !== -1) {
-                    const firstMsg = requestBody.messages[firstUserIdx];
-                    const prefix = `[System Instructions]\n${systemPrompt}\n[End System Instructions]\n\n`;
-                    if (Array.isArray(firstMsg.content)) {
-                        // Anthropic format: content is array of blocks — prepend as a text block
-                        requestBody.messages[firstUserIdx] = {
-                            ...firstMsg,
-                            content: [{ type: 'text', text: prefix }, ...firstMsg.content]
-                        };
-                        injectionMethods.push('inject_first_user:prepended_text_block_to_array');
+                    // auto: use existing detection logic
+                    if (autoDetectedAnthropic) {
+                        useAnthropic = true;
                     } else {
-                        requestBody.messages[firstUserIdx] = {
-                            ...firstMsg,
-                            content: `${prefix}${firstMsg.content ?? ''}`
-                        };
-                        injectionMethods.push('inject_first_user:merged_into_first_user_message');
+                        useOpenAI = true;
                     }
-                } else {
-                    injectionMethods.push('inject_first_user:skipped_no_user_message_found');
                 }
-            } else if (useInjectFirstUser) {
-                injectionMethods.push('inject_first_user:skipped_no_messages_array');
-            }
 
-            if (injectionMethods.length === 0) {
-                injectionMethods.push('none:no_target');
-            }
+                let injectionMethods: string[] = [];
 
-            console.log('[PROXY] [SYSPROMPT] ✅ Injected:', {
-                format: formatSetting,
-                methods: injectionMethods,
-                source: systemPromptSource,
-                promptLength: systemPrompt.length,
-                promptPreview: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
-                clientPath,
-                autoDetectedAnthropic,
-                hadExistingSystemMsg: !!existingSystemInMessages
-            });
+                if (useAnthropic) {
+                    // If existing system is already an array, append our prompt as a text block
+                    // Otherwise set as array format (required by some upstreams like supperapi.store)
+                    if (Array.isArray(requestBody.system)) {
+                        requestBody.system = [...requestBody.system, { type: 'text', text: systemPrompt }];
+                        injectionMethods.push('anthropic:requestBody.system_array_appended');
+                    } else {
+                        requestBody.system = [{ type: 'text', text: systemPrompt }];
+                        injectionMethods.push('anthropic:requestBody.system_array');
+                    }
+                }
+
+                if (useOpenAI && requestBody.messages && Array.isArray(requestBody.messages)) {
+                    if (existingSystemInMessages) {
+                        requestBody.messages = requestBody.messages.map((msg: any) => msg.role === 'system' ? { role: 'system', content: systemPrompt } : msg);
+                        injectionMethods.push('openai:replaced_existing_system_message');
+                    } else {
+                        requestBody.messages.unshift({ role: 'system', content: systemPrompt });
+                        injectionMethods.push('openai:prepended_new_system_message');
+                    }
+                } else if (useOpenAI) {
+                    injectionMethods.push('openai:skipped_no_messages_array');
+                }
+
+                if (useUserMessage && requestBody.messages && Array.isArray(requestBody.messages)) {
+                    // Remove existing system messages to avoid conflicts
+                    if (existingSystemInMessages) {
+                        requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
+                        injectionMethods.push('user_message:removed_existing_system_messages');
+                    }
+                    // Remove top-level system field if present
+                    if ('system' in requestBody) {
+                        delete requestBody.system;
+                    }
+                    const wrappedContent = `[System Instructions]\n${systemPrompt}\n[End System Instructions]`;
+                    requestBody.messages.unshift({ role: 'user', content: wrappedContent });
+                    injectionMethods.push('user_message:prepended_as_user_role');
+                } else if (useUserMessage) {
+                    injectionMethods.push('user_message:skipped_no_messages_array');
+                }
+
+                if (useInjectFirstUser && requestBody.messages && Array.isArray(requestBody.messages)) {
+                    // Remove top-level system field and any system messages
+                    if ('system' in requestBody) delete requestBody.system;
+                    if (existingSystemInMessages) {
+                        requestBody.messages = requestBody.messages.filter((msg: any) => msg.role !== 'system');
+                    }
+                    // Find first user message and prepend system prompt to its content
+                    const firstUserIdx = requestBody.messages.findIndex((msg: any) => msg.role === 'user');
+                    if (firstUserIdx !== -1) {
+                        const firstMsg = requestBody.messages[firstUserIdx];
+                        const prefix = `[System Instructions]\n${systemPrompt}\n[End System Instructions]\n\n`;
+                        if (Array.isArray(firstMsg.content)) {
+                            // Anthropic format: content is array of blocks — prepend as a text block
+                            requestBody.messages[firstUserIdx] = {
+                                ...firstMsg,
+                                content: [{ type: 'text', text: prefix }, ...firstMsg.content]
+                            };
+                            injectionMethods.push('inject_first_user:prepended_text_block_to_array');
+                        } else {
+                            requestBody.messages[firstUserIdx] = {
+                                ...firstMsg,
+                                content: `${prefix}${firstMsg.content ?? ''}`
+                            };
+                            injectionMethods.push('inject_first_user:merged_into_first_user_message');
+                        }
+                    } else {
+                        injectionMethods.push('inject_first_user:skipped_no_user_message_found');
+                    }
+                } else if (useInjectFirstUser) {
+                    injectionMethods.push('inject_first_user:skipped_no_messages_array');
+                }
+
+                if (injectionMethods.length === 0) {
+                    injectionMethods.push('none:no_target');
+                }
+
+                console.log('[PROXY] [SYSPROMPT] ✅ Injected:', {
+                    format: formatSetting,
+                    methods: injectionMethods,
+                    source: systemPromptSource,
+                    promptLength: systemPrompt.length,
+                    promptPreview: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
+                    clientPath,
+                    autoDetectedAnthropic,
+                    hadExistingSystemMsg: !!existingSystemInMessages
+                });
             } // end else (formatSetting !== 'disabled')
         } else if (!systemPrompt) {
             console.log('[PROXY] [SYSPROMPT] ⏭️ No system prompt configured — skipping injection');
@@ -699,46 +699,80 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             controller.abort();
         }, 300000); // 5 minutes to match server timeout
 
-        let response: Response;
-        try {
-            response = await fetch(apiUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Accept': 'text/event-stream',
-                    'Accept-Encoding': 'identity',
-                    'Connection': 'keep-alive',
-                    'x-api-key': apiKey,
-                    // Forward Anthropic/client headers if present
-                    ...(req.headers['anthropic-version'] && { 'anthropic-version': req.headers['anthropic-version'] as string }),
-                    ...(req.headers['anthropic-beta'] && { 'anthropic-beta': req.headers['anthropic-beta'] as string }),
-                    ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] as string }),
-                    ...(req.headers['x-app'] && { 'x-app': req.headers['x-app'] as string }),
-                    ...(req.headers['x-stainless-lang'] && { 'x-stainless-lang': req.headers['x-stainless-lang'] as string }),
-                    ...(req.headers['x-stainless-os'] && { 'x-stainless-os': req.headers['x-stainless-os'] as string }),
-                    ...(req.headers['x-stainless-arch'] && { 'x-stainless-arch': req.headers['x-stainless-arch'] as string }),
-                    ...(req.headers['x-stainless-runtime'] && { 'x-stainless-runtime': req.headers['x-stainless-runtime'] as string }),
-                    ...(req.headers['x-stainless-runtime-version'] && { 'x-stainless-runtime-version': req.headers['x-stainless-runtime-version'] as string }),
-                    ...(req.headers['x-stainless-package-version'] && { 'x-stainless-package-version': req.headers['x-stainless-package-version'] as string }),
-                    ...(req.headers['anthropic-dangerous-direct-browser-access'] && { 'anthropic-dangerous-direct-browser-access': req.headers['anthropic-dangerous-direct-browser-access'] as string }),
-                },
-                body: JSON.stringify(requestBody),
-                signal: controller.signal,
-                // @ts-ignore - Node.js fetch supports agent option
-                agent: httpsAgent,
-            });
-        } catch (fetchError) {
-            clearTimeout(timeoutId);
-            if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
+        let response: Response | undefined;
 
-            console.error('[PROXY] Fetch error:', fetchError);
-            if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-                return res.status(504).json({ error: 'Request timeout' });
+        const fetchHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'Accept': 'text/event-stream',
+            'Accept-Encoding': 'identity',
+            'Connection': 'keep-alive',
+            'x-api-key': apiKey,
+            // Forward Anthropic/client headers if present
+            ...(req.headers['anthropic-version'] && { 'anthropic-version': req.headers['anthropic-version'] as string }),
+            ...(req.headers['anthropic-beta'] && { 'anthropic-beta': req.headers['anthropic-beta'] as string }),
+            ...(req.headers['user-agent'] && { 'User-Agent': req.headers['user-agent'] as string }),
+            ...(req.headers['x-app'] && { 'x-app': req.headers['x-app'] as string }),
+            ...(req.headers['x-stainless-lang'] && { 'x-stainless-lang': req.headers['x-stainless-lang'] as string }),
+            ...(req.headers['x-stainless-os'] && { 'x-stainless-os': req.headers['x-stainless-os'] as string }),
+            ...(req.headers['x-stainless-arch'] && { 'x-stainless-arch': req.headers['x-stainless-arch'] as string }),
+            ...(req.headers['x-stainless-runtime'] && { 'x-stainless-runtime': req.headers['x-stainless-runtime'] as string }),
+            ...(req.headers['x-stainless-runtime-version'] && { 'x-stainless-runtime-version': req.headers['x-stainless-runtime-version'] as string }),
+            ...(req.headers['x-stainless-package-version'] && { 'x-stainless-package-version': req.headers['x-stainless-package-version'] as string }),
+            ...(req.headers['anthropic-dangerous-direct-browser-access'] && { 'anthropic-dangerous-direct-browser-access': req.headers['anthropic-dangerous-direct-browser-access'] as string }),
+        };
+
+        const fetchBody = JSON.stringify(requestBody);
+        const MAX_FETCH_RETRIES = 2;
+
+        for (let attempt = 1; attempt <= MAX_FETCH_RETRIES; attempt++) {
+            try {
+                response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: fetchHeaders,
+                    body: fetchBody,
+                    signal: controller.signal,
+                    // @ts-ignore - Node.js fetch supports agent option
+                    agent: httpsAgent,
+                });
+                break; // Success - exit retry loop
+            } catch (fetchError) {
+                const isZlibError = fetchError instanceof Error && (
+                    fetchError.message.includes('ZlibError') ||
+                    fetchError.message.includes('Zlib') ||
+                    fetchError.message.includes('incorrect header check') ||
+                    fetchError.message.includes('unexpected end of file') ||
+                    fetchError.message.includes('invalid stored block lengths') ||
+                    fetchError.name === 'ZlibError'
+                );
+
+                if (isZlibError && attempt < MAX_FETCH_RETRIES) {
+                    console.warn(`[PROXY] ZlibError on attempt ${attempt}, retrying without compression...`, {
+                        error: (fetchError as Error).message,
+                        url: apiUrl
+                    });
+                    // Force no compression on retry
+                    fetchHeaders['Accept-Encoding'] = 'identity';
+                    continue; // Retry
+                }
+
+                clearTimeout(timeoutId);
+                if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
+
+                console.error('[PROXY] Fetch error:', fetchError);
+                if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+                    return res.status(504).json({ error: 'Request timeout' });
+                }
+                throw fetchError;
             }
-            throw fetchError;
         }
         clearTimeout(timeoutId);
+
+        // Safety check - should never happen as fetch errors are thrown above
+        if (!response) {
+            if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
+            return res.status(502).json({ error: 'Failed to get response from upstream after retries' });
+        }
 
         if (!response.ok) {
             // Decrement immediately on error
@@ -909,7 +943,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     res.write(chunk);
                 }
             } catch (streamError) {
-                console.error('Stream error:', streamError);
+                const isZlibError = streamError instanceof Error && (
+                    streamError.message.includes('ZlibError') ||
+                    streamError.message.includes('Zlib') ||
+                    streamError.message.includes('incorrect header check') ||
+                    streamError.message.includes('unexpected end of file') ||
+                    streamError.name === 'ZlibError'
+                );
+
+                if (isZlibError) {
+                    console.error('[PROXY] ZlibError during stream read - upstream sent corrupted compressed data:', {
+                        error: (streamError as Error).message,
+                        url: apiUrl,
+                        hint: 'Upstream server may be sending gzip-encoded data despite Accept-Encoding: identity'
+                    });
+                } else {
+                    console.error('[PROXY] Stream error:', streamError);
+                }
                 clearInterval(heartbeatInterval);
                 await safeDecrement('Stream error');
                 res.end();
