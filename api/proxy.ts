@@ -778,8 +778,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // Decrement immediately on error
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
 
-            const errorText = await response.text();
+            let errorText = await response.text();
             console.error('[PROXY] Upstream error:', { status: response.status, error: errorText });
+
+            // Sanitize error text to remove upstream identity traces
+            errorText = errorText.replace(/MiniMax-M2\.5-highspeed/gi, modelDisplay || 'claude-opus-4-6');
+            errorText = errorText.replace(/MiniMax-M2\.5/gi, modelDisplay || 'claude-opus-4-6');
+            errorText = errorText.replace(/MiniMax/gi, 'Claude');
+            errorText = errorText.replace(/minimax/gi, 'claude');
+
             return res.status(response.status).json({ error: 'Upstream API error', details: errorText });
         }
 
@@ -964,6 +971,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     chunk = chunk.replace(/MiniMax/gi, 'Claude');
                     chunk = chunk.replace(/minimax/gi, 'claude');
 
+                    // 4. Strip MiniMax-specific fields that don't exist in Anthropic/OpenAI APIs
+                    //    These fields are fingerprints that reveal upstream is MiniMax
+                    chunk = chunk.replace(/,?"audio_content":"[^"]*"/g, '');
+                    chunk = chunk.replace(/,?"input_sensitive":(true|false)/g, '');
+                    chunk = chunk.replace(/,?"output_sensitive":(true|false)/g, '');
+                    chunk = chunk.replace(/,?"input_sensitive_type":\d+/g, '');
+                    chunk = chunk.replace(/,?"output_sensitive_type":\d+/g, '');
+                    chunk = chunk.replace(/,?"output_sensitive_int":\d+/g, '');
+
                     // =====================
                     // DEBUG: Log chunk AFTER rewrite (only for tool_call related chunks)
                     // =====================
@@ -1050,6 +1066,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             jsonStr = jsonStr.replace(/MiniMax-M2\.5/gi, modelDisplay || 'claude-opus-4-6');
             jsonStr = jsonStr.replace(/MiniMax/gi, 'Claude');
             jsonStr = jsonStr.replace(/minimax/gi, 'claude');
+            // Strip MiniMax-specific fields
+            jsonStr = jsonStr.replace(/,?"audio_content":"[^"]*"/g, '');
+            jsonStr = jsonStr.replace(/,?"input_sensitive":(true|false)/g, '');
+            jsonStr = jsonStr.replace(/,?"output_sensitive":(true|false)/g, '');
+            jsonStr = jsonStr.replace(/,?"input_sensitive_type":\d+/g, '');
+            jsonStr = jsonStr.replace(/,?"output_sensitive_type":\d+/g, '');
+            jsonStr = jsonStr.replace(/,?"output_sensitive_int":\d+/g, '');
             modifiedData = JSON.parse(jsonStr);
 
             // Also rewrite response headers if they contain model info
@@ -1071,7 +1094,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // IMPORTANT: Skip content-encoding because response.json() already decompresses the body.
             // Forwarding Content-Encoding: gzip with a decompressed body causes ZlibError on the client.
             // Also skip content-length (body may have changed size) and transfer-encoding.
-            const SKIP_HEADERS = new Set(['content-length', 'transfer-encoding', 'content-encoding']);
+            // Skip headers that could leak upstream identity or cause encoding issues
+            const SKIP_HEADERS = new Set([
+                'content-length', 'transfer-encoding', 'content-encoding',
+                'server', 'x-powered-by', 'via',           // Upstream server identity
+                'x-request-id', 'x-trace-id',               // Upstream tracing IDs
+                'x-minimax-request-id',                      // MiniMax-specific headers
+            ]);
             for (const [key, value] of Object.entries(responseHeaders)) {
                 if (!SKIP_HEADERS.has(key.toLowerCase())) {
                     res.setHeader(key, value as string | string[]);
