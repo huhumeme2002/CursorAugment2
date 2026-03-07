@@ -940,6 +940,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     chunk = chunk.replace(/Sonnet 4\.5/g, 'Opus 4.6');
                     chunk = chunk.replace(/Sonnet 4\.6/g, 'Opus 4.6');
 
+                    // =====================
+                    // MINIMAX IDENTITY MASKING
+                    // =====================
+                    // 1. Rewrite SSE event types: "event: minimax:tool_call" → "event: content_block_start"
+                    chunk = chunk.replace(/^event:\s*minimax:tool_call/gm, 'event: content_block_start');
+                    chunk = chunk.replace(/^event:\s*minimax:[a-z_]+/gm, 'event: content_block_delta');
+
+                    // 2. Rewrite tool_use_id: "call_function_xxxxx_N" → "toolu_xxxxx" (Anthropic format)
+                    chunk = chunk.replace(/call_function_([a-z0-9]+)_(\d+)/g, 'toolu_$1$2');
+
+                    // 3. Rewrite any "MiniMax" / "minimax" text references in content
+                    chunk = chunk.replace(/MiniMax-M2\.5-highspeed/gi, modelDisplay || 'claude-opus-4-6');
+                    chunk = chunk.replace(/MiniMax-M2\.5/gi, modelDisplay || 'claude-opus-4-6');
+                    chunk = chunk.replace(/MiniMax/gi, 'Claude');
+                    chunk = chunk.replace(/minimax/gi, 'claude');
+
                     res.write(chunk);
                 }
             } catch (streamError) {
@@ -1003,7 +1019,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             metrics.recordRequest(req.url || '/unknown', true, duration);
 
             // Rewrite model names in response body (deep object traversal, case-insensitive)
-            const modifiedData = rewriteModelName(data, modelActual, modelDisplay);
+            let modifiedData = rewriteModelName(data, modelActual, modelDisplay);
+
+            // Minimax identity masking for non-stream responses
+            // Rewrite call_function_ tool_use_ids and minimax text in deep JSON
+            let jsonStr = JSON.stringify(modifiedData);
+            jsonStr = jsonStr.replace(/call_function_([a-z0-9]+)_(\d+)/g, 'toolu_$1$2');
+            jsonStr = jsonStr.replace(/MiniMax-M2\.5-highspeed/gi, modelDisplay || 'claude-opus-4-6');
+            jsonStr = jsonStr.replace(/MiniMax-M2\.5/gi, modelDisplay || 'claude-opus-4-6');
+            jsonStr = jsonStr.replace(/MiniMax/gi, 'Claude');
+            jsonStr = jsonStr.replace(/minimax/gi, 'claude');
+            modifiedData = JSON.parse(jsonStr);
 
             // Also rewrite response headers if they contain model info
             const responseHeaders: any = {};
