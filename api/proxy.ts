@@ -723,7 +723,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
 
         const fetchBody = JSON.stringify(requestBody);
-        const MAX_FETCH_RETRIES = 2;
+        const MAX_FETCH_RETRIES = 3;
+        const RETRYABLE_STATUS_CODES = new Set([500, 502, 503, 504]);
 
         for (let attempt = 1; attempt <= MAX_FETCH_RETRIES; attempt++) {
             try {
@@ -735,31 +736,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     // @ts-ignore - Node.js fetch supports agent option
                     agent: httpsAgent,
                 });
-                break; // Success - exit retry loop
+
+                // Check for retryable HTTP status codes (5xx from upstream)
+                if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < MAX_FETCH_RETRIES) {
+                    const errorBody = await response.text();
+                    const backoffMs = attempt * 2000; // 2s, 4s
+                    console.warn(`[PROXY] Upstream returned ${response.status} on attempt ${attempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
+                        url: apiUrl,
+                        source: activeSource!.name,
+                        errorPreview: errorBody.substring(0, 200)
+                    });
+                    await new Promise(resolve => setTimeout(resolve, backoffMs));
+                    continue; // Retry
+                }
+
+                break; // Success or non-retryable status - exit retry loop
             } catch (fetchError) {
-                const isZlibError = fetchError instanceof Error && (
+                const isRetryableNetworkError = fetchError instanceof Error && (
                     fetchError.message.includes('ZlibError') ||
                     fetchError.message.includes('Zlib') ||
                     fetchError.message.includes('incorrect header check') ||
                     fetchError.message.includes('unexpected end of file') ||
                     fetchError.message.includes('invalid stored block lengths') ||
-                    fetchError.name === 'ZlibError'
+                    fetchError.name === 'ZlibError' ||
+                    fetchError.message.includes('ECONNRESET') ||
+                    fetchError.message.includes('ECONNREFUSED') ||
+                    fetchError.message.includes('ETIMEDOUT') ||
+                    fetchError.message.includes('UND_ERR_CONNECT_TIMEOUT')
                 );
 
-                if (isZlibError && attempt < MAX_FETCH_RETRIES) {
-                    console.warn(`[PROXY] ZlibError on attempt ${attempt}, retrying without compression...`, {
+                if (isRetryableNetworkError && attempt < MAX_FETCH_RETRIES) {
+                    const backoffMs = attempt * 2000;
+                    console.warn(`[PROXY] Network error on attempt ${attempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
                         error: (fetchError as Error).message,
                         url: apiUrl
                     });
-                    // Force no compression on retry
+                    // Force no compression on retry (helps with ZlibError)
                     fetchHeaders['Accept-Encoding'] = 'identity';
+                    await new Promise(resolve => setTimeout(resolve, backoffMs));
                     continue; // Retry
                 }
 
                 clearTimeout(timeoutId);
                 if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
 
-                console.error('[PROXY] Fetch error:', fetchError);
+                console.error('[PROXY] Fetch error (all retries exhausted):', fetchError);
                 if (fetchError instanceof Error && fetchError.name === 'AbortError') {
                     return res.status(504).json({ error: 'Request timeout' });
                 }
@@ -779,7 +800,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
 
             let errorText = await response.text();
-            console.error('[PROXY] Upstream error:', { status: response.status, error: errorText });
+            console.error('[PROXY] Upstream error (after all retries):', {
+                status: response.status,
+                attempts: MAX_FETCH_RETRIES,
+                source: activeSource!.name,
+                error: errorText.substring(0, 500)
+            });
 
             // Sanitize error text to remove upstream identity traces
             errorText = errorText.replace(/MiniMax-M2\.5-highspeed/gi, modelDisplay || 'claude-opus-4-6');
