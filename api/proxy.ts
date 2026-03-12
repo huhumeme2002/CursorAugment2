@@ -12,7 +12,7 @@ import { metrics } from '../lib/metrics';
 const httpsAgent = new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 30000,   // Keep idle connections alive for 30s
-    maxSockets: 50,           // Max concurrent connections per host
+    maxSockets: 100,          // Max concurrent connections per host (increased for cluster mode)
     maxFreeSockets: 10,       // Keep 10 idle connections ready
     timeout: 60000,           // Socket timeout: 60s
 });

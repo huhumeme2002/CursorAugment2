@@ -12,6 +12,20 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Support large payloads
 app.use(express.text({ limit: '10mb' }));
 
+// Track active requests for graceful shutdown
+let activeRequests = 0;
+app.use((req, res, next) => {
+    activeRequests++;
+    const onDone = () => {
+        activeRequests--;
+        res.removeListener('finish', onDone);
+        res.removeListener('close', onDone);
+    };
+    res.on('finish', onDone);
+    res.on('close', onDone);
+    next();
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
@@ -121,6 +135,8 @@ app.all('/api/*', async (req, res) => {
     }
 });
 
+
+
 // Legacy /v1/* routes
 app.all('/v1/*', async (req, res) => {
     // Rewrite path to match what the proxy expects
@@ -141,7 +157,53 @@ const server = app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`- Proxy endpoint: http://localhost:${PORT}/api/proxy`);
     console.log(`- Health check: http://localhost:${PORT}/health`);
+
+    // Notify PM2 that this worker is ready to receive traffic
+    if (process.send) {
+        process.send('ready');
+        console.log('📡 PM2 ready signal sent');
+    }
 });
 
 // Increase timeout to 5 minutes (300,000 ms) to avoid 504 errors on long generations
 server.setTimeout(300000);
+
+// =====================
+// GRACEFUL SHUTDOWN
+// =====================
+// When PM2 restarts/reloads workers, wait for active requests to finish
+// instead of killing them immediately (which causes 500 errors)
+const gracefulShutdown = async (signal: string) => {
+    console.log(`🛑 ${signal} received. Starting graceful shutdown...`);
+    console.log(`   Active requests: ${activeRequests}`);
+
+    // Stop accepting new connections
+    server.close(() => {
+        console.log('✅ HTTP server closed (no new connections)');
+    });
+
+    // Wait for active requests to finish (max 25s, leave 5s buffer for PM2's kill_timeout of 30s)
+    const maxWait = 25000;
+    const startTime = Date.now();
+
+    const waitForDrain = () => new Promise<void>((resolve) => {
+        const check = setInterval(() => {
+            if (activeRequests <= 0 || Date.now() - startTime > maxWait) {
+                clearInterval(check);
+                if (activeRequests > 0) {
+                    console.warn(`⚠️ Force shutdown with ${activeRequests} active request(s) after ${maxWait}ms`);
+                } else {
+                    console.log('✅ All requests drained. Clean exit.');
+                }
+                resolve();
+            }
+        }, 500);
+    });
+
+    await waitForDrain();
+    process.exit(0);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
