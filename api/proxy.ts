@@ -724,9 +724,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const fetchBody = JSON.stringify(requestBody);
         const MAX_FETCH_RETRIES = 3;
+        const MAX_TRAFFIC_RETRIES = 60; // Keep retrying "Traffic high" for up to ~2 minutes
+        const TRAFFIC_RETRY_DELAY_MS = 2000; // 2s between traffic retries
         const RETRYABLE_STATUS_CODES = new Set([500, 502, 503, 504]);
 
-        for (let attempt = 1; attempt <= MAX_FETCH_RETRIES; attempt++) {
+        let generalAttempt = 0;
+        let trafficRetryCount = 0;
+        let lastErrorBody: string | null = null;
+
+        retryLoop: while (true) {
+            generalAttempt++;
             try {
                 response = await fetch(apiUrl, {
                     method: 'POST',
@@ -738,19 +745,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 });
 
                 // Check for retryable HTTP status codes (5xx from upstream)
-                if (RETRYABLE_STATUS_CODES.has(response.status) && attempt < MAX_FETCH_RETRIES) {
-                    const errorBody = await response.text();
-                    const backoffMs = attempt * 2000; // 2s, 4s
-                    console.warn(`[PROXY] Upstream returned ${response.status} on attempt ${attempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
-                        url: apiUrl,
-                        source: activeSource!.name,
-                        errorPreview: errorBody.substring(0, 200)
-                    });
-                    await new Promise(resolve => setTimeout(resolve, backoffMs));
-                    continue; // Retry
+                if (RETRYABLE_STATUS_CODES.has(response.status)) {
+                    lastErrorBody = await response.text();
+
+                    // Special handling: "Traffic is currently high" - keep retrying until it clears
+                    const isTrafficError = /traffic is\s+currently high|rate limits for standard plans/i.test(lastErrorBody);
+
+                    if (isTrafficError && trafficRetryCount < MAX_TRAFFIC_RETRIES) {
+                        trafficRetryCount++;
+                        if (trafficRetryCount === 1 || trafficRetryCount % 10 === 0) {
+                            // Log first attempt and every 10th to avoid log spam
+                            console.warn(`[PROXY] ⏳ Traffic high (retry ${trafficRetryCount}/${MAX_TRAFFIC_RETRIES}), waiting ${TRAFFIC_RETRY_DELAY_MS}ms...`, {
+                                url: apiUrl,
+                                source: activeSource!.name
+                            });
+                        }
+                        await new Promise(resolve => setTimeout(resolve, TRAFFIC_RETRY_DELAY_MS));
+                        generalAttempt--; // Don't count traffic retries against general retry budget
+                        continue retryLoop;
+                    }
+
+                    if (isTrafficError && trafficRetryCount >= MAX_TRAFFIC_RETRIES) {
+                        console.error(`[PROXY] ❌ Traffic still high after ${trafficRetryCount} retries (~${trafficRetryCount * TRAFFIC_RETRY_DELAY_MS / 1000}s), giving up`);
+                        break;
+                    }
+
+                    // General 5xx retry (non-traffic errors)
+                    if (generalAttempt < MAX_FETCH_RETRIES) {
+                        const backoffMs = generalAttempt * 2000; // 2s, 4s
+                        console.warn(`[PROXY] Upstream returned ${response.status} on attempt ${generalAttempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
+                            url: apiUrl,
+                            source: activeSource!.name,
+                            errorPreview: lastErrorBody.substring(0, 200)
+                        });
+                        await new Promise(resolve => setTimeout(resolve, backoffMs));
+                        continue retryLoop;
+                    }
                 }
 
-                break; // Success or non-retryable status - exit retry loop
+                break; // Success or non-retryable status or exhausted retries
             } catch (fetchError) {
                 const isRetryableNetworkError = fetchError instanceof Error && (
                     fetchError.message.includes('ZlibError') ||
@@ -765,16 +798,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     fetchError.message.includes('UND_ERR_CONNECT_TIMEOUT')
                 );
 
-                if (isRetryableNetworkError && attempt < MAX_FETCH_RETRIES) {
-                    const backoffMs = attempt * 2000;
-                    console.warn(`[PROXY] Network error on attempt ${attempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
+                if (isRetryableNetworkError && generalAttempt < MAX_FETCH_RETRIES) {
+                    const backoffMs = generalAttempt * 2000;
+                    console.warn(`[PROXY] Network error on attempt ${generalAttempt}/${MAX_FETCH_RETRIES}, retrying in ${backoffMs}ms...`, {
                         error: (fetchError as Error).message,
                         url: apiUrl
                     });
                     // Force no compression on retry (helps with ZlibError)
                     fetchHeaders['Accept-Encoding'] = 'identity';
                     await new Promise(resolve => setTimeout(resolve, backoffMs));
-                    continue; // Retry
+                    continue retryLoop;
                 }
 
                 clearTimeout(timeoutId);
@@ -786,6 +819,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
                 throw fetchError;
             }
+        }
+
+        // Log traffic retry summary if any occurred
+        if (trafficRetryCount > 0) {
+            console.log(`[PROXY] ✅ Traffic retry summary: ${trafficRetryCount} retries, ${response?.ok ? 'succeeded' : 'failed'}`);
         }
         clearTimeout(timeoutId);
 
@@ -799,10 +837,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // Decrement immediately on error
             if (concurrencyIdToDecrement) await decrementConcurrency(concurrencyIdToDecrement);
 
-            let errorText = await response.text();
+            let errorText = lastErrorBody || await response.text();
             console.error('[PROXY] Upstream error (after all retries):', {
                 status: response.status,
-                attempts: MAX_FETCH_RETRIES,
+                generalAttempts: generalAttempt,
+                trafficRetries: trafficRetryCount,
                 source: activeSource!.name,
                 error: errorText.substring(0, 500)
             });
