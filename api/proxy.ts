@@ -212,6 +212,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(401).json({ error: 'Invalid API key' });
         }
 
+        // Per-key debug mode: enable via Redis field debug_mode=true
+        const isDebugKey = !!keyData.debug_mode;
+        const debugLog = (...args: any[]) => {
+            if (isDebugKey) console.log('[DEBUG-KEY]', `[${userToken.substring(0, 8)}]`, ...args);
+        };
+        if (isDebugKey) {
+            console.log('[DEBUG-KEY] ========== DEBUG SESSION START ==========');
+            console.log('[DEBUG-KEY] Key:', userToken);
+            console.log('[DEBUG-KEY] Client IP:', clientIP);
+            console.log('[DEBUG-KEY] Endpoint:', clientPath);
+        }
+
         // ====================
         // 2. EXPIRY CHECK
         // ====================
@@ -980,6 +992,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (requestBody.stream) {
             // ... (Stream logic) ...
             console.log('[PROXY] Starting stream');
+            debugLog('Stream mode: true, upstream status:', response.status);
             res.setHeader('Content-Type', 'text/event-stream');
             res.setHeader('Cache-Control', 'no-cache');
             res.setHeader('Connection', 'keep-alive');
@@ -1054,6 +1067,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             const decoder = new TextDecoder();
             let streamTokenUsage: { input_tokens?: number; output_tokens?: number } = {};
+            let streamChunkCount = 0;
+            let streamTotalBytes = 0;
+            const streamStartTime = Date.now();
 
             try {
                 while (true) {
@@ -1062,6 +1078,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         // Stream finished successfully
                         clearInterval(heartbeatInterval);
                         await safeDecrement('Stream complete');
+                        debugLog('✅ Stream complete:', { chunks: streamChunkCount, totalBytes: streamTotalBytes, durationMs: Date.now() - streamStartTime });
 
                         // Log token usage from stream
                         if (streamTokenUsage.input_tokens || streamTokenUsage.output_tokens) {
@@ -1086,6 +1103,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     }
 
                     let chunk = decoder.decode(value, { stream: true });
+                    streamChunkCount++;
+                    streamTotalBytes += chunk.length;
+
+                    // Per-key debug: log every chunk with timing
+                    if (isDebugKey) {
+                        const elapsed = Date.now() - streamStartTime;
+                        debugLog(`Chunk #${streamChunkCount} | +${elapsed}ms | ${chunk.length} bytes | total: ${streamTotalBytes} bytes`);
+                        // Log SSE event types in this chunk
+                        const eventTypes = chunk.match(/"type":"([^"]+)"/g);
+                        if (eventTypes) debugLog('  Events:', eventTypes.join(', '));
+                        // Log stop_reason if present (critical for debugging cutoffs)
+                        const stopMatch = chunk.match(/"stop_reason":"?([^"\},]+)"?/);
+                        if (stopMatch) debugLog('  ⚠️ stop_reason:', stopMatch[1]);
+                    }
 
                     // Extract token usage from SSE stream events                    // Extract token usage from SSE stream events
                     // Anthropic: message_delta with usage, or message_start with usage
@@ -1193,6 +1224,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 } else {
                     console.error('[PROXY] Stream error:', streamError);
                 }
+                debugLog('❌ Stream error after', streamChunkCount, 'chunks,', streamTotalBytes, 'bytes,', Date.now() - streamStartTime, 'ms:', (streamError as Error).message);
                 clearInterval(heartbeatInterval);
                 await safeDecrement('Stream error');
                 res.end();

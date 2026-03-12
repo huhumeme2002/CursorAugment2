@@ -23,6 +23,7 @@ export interface RedisKeyData {
     selected_api_profile_id?: string; // ID of the specific backend API profile (independent of model)
     last_request_timestamp?: number; // Unix timestamp (ms) of last request - for conversation turn detection
     last_conversation_id?: string;   // Track conversation sessions to prevent duplicate counting
+    debug_mode?: boolean;            // Enable verbose per-key debug logging
 }
 
 // Backup Profile configuration (for Waterfall fallback)
