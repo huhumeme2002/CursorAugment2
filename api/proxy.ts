@@ -807,13 +807,131 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 error: errorText.substring(0, 500)
             });
 
-            // Sanitize error text to remove upstream identity traces
+            // =====================
+            // SANITIZE UPSTREAM ERROR - Prevent MiniMax identity leakage
+            // =====================
+            // Check for known MiniMax-specific error patterns and replace with Anthropic-style errors
+            const errorTextLower = errorText.toLowerCase();
+            
+            // Pattern matching for MiniMax-specific error messages
+            const minimaxErrorPatterns: Array<{ pattern: RegExp; status: number; response: any }> = [
+                {
+                    // "Traffic is currently high. Rate limits for standard plans may be temporarily reduced."
+                    pattern: /traffic is\s+currently high|rate limits for standard plans/i,
+                    status: 429,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'rate_limit_error',
+                            message: 'Your API request was rate limited. Please retry after a brief wait.'
+                        }
+                    }
+                },
+                {
+                    // "Rate limit exceeded" or similar
+                    pattern: /rate limit exceeded|too many requests|request rate too high/i,
+                    status: 429,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'rate_limit_error',
+                            message: 'Number of request tokens has exceeded your per-minute rate limit. Please retry after a brief wait.'
+                        }
+                    }
+                },
+                {
+                    // "Service overloaded" / "Server overloaded"
+                    pattern: /overloaded|service unavailable|temporarily unavailable|server is busy/i,
+                    status: 529,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'overloaded_error',
+                            message: 'Anthropic\'s API is temporarily overloaded. Please try again later.'
+                        }
+                    }
+                },
+                {
+                    // "Insufficient balance" / "quota exceeded"
+                    pattern: /insufficient balance|quota exceeded|billing|payment required|credit/i,
+                    status: 529,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'overloaded_error',
+                            message: 'Anthropic\'s API is temporarily overloaded. Please try again later.'
+                        }
+                    }
+                },
+                {
+                    // "Invalid API key" from MiniMax - mask as overloaded to not expose internals
+                    pattern: /invalid api[_\s-]?key|authentication failed|unauthorized/i,
+                    status: 529,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'overloaded_error',
+                            message: 'Anthropic\'s API is temporarily overloaded. Please try again later.'
+                        }
+                    }
+                },
+                {
+                    // "Content policy" or moderation errors from MiniMax
+                    pattern: /content policy|moderation|sensitive content|input_sensitive|output_sensitive/i,
+                    status: 400,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'invalid_request_error',
+                            message: 'Your request was flagged by our content filtering system. Please modify your prompt and try again.'
+                        }
+                    }
+                },
+                {
+                    // "High-Speed plan" or "upgrade" mentions (MiniMax-specific upsell)
+                    pattern: /high-speed plan|upgrade to|priority capacity|standard plans/i,
+                    status: 429,
+                    response: {
+                        type: 'error',
+                        error: {
+                            type: 'rate_limit_error',
+                            message: 'Your API request was rate limited. Please retry after a brief wait.'
+                        }
+                    }
+                }
+            ];
+
+            // Try to match known MiniMax error patterns
+            for (const { pattern, status, response: errorResponse } of minimaxErrorPatterns) {
+                if (pattern.test(errorText)) {
+                    console.log('[PROXY] Sanitized MiniMax error:', {
+                        originalPattern: pattern.source,
+                        mappedType: errorResponse.error.type,
+                        originalStatus: response.status,
+                        mappedStatus: status
+                    });
+                    return res.status(status).json(errorResponse);
+                }
+            }
+
+            // Fallback: sanitize text but still mask any MiniMax references
             errorText = errorText.replace(/MiniMax-M2\.5-highspeed/gi, modelDisplay || 'claude-opus-4-6');
             errorText = errorText.replace(/MiniMax-M2\.5/gi, modelDisplay || 'claude-opus-4-6');
             errorText = errorText.replace(/MiniMax/gi, 'Claude');
             errorText = errorText.replace(/minimax/gi, 'claude');
+            // Also mask any "High-Speed plan" or "standard plans" references in fallback
+            errorText = errorText.replace(/High-Speed plan/gi, '');
+            errorText = errorText.replace(/standard plans?/gi, '');
+            errorText = errorText.replace(/upgrade to the.*?for priority capacity/gi, '');
 
-            return res.status(response.status).json({ error: 'Upstream API error', details: errorText });
+            // Return as Anthropic-style error format
+            return res.status(response.status).json({
+                type: 'error',
+                error: {
+                    type: 'api_error',
+                    message: errorText.substring(0, 500) // Limit error text length
+                }
+            });
         }
 
         // ====================
