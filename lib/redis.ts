@@ -477,12 +477,12 @@ export async function getSettings(): Promise<ProxySettings | null> {
 
     // Check if cache is valid
     if (settingsCache !== null && (now - settingsCacheTimestamp) < SETTINGS_CACHE_TTL) {
-        console.log('[CACHE] Settings cache HIT');
+
         return settingsCache;
     }
 
     // Cache miss or expired - fetch from Redis
-    console.log('[CACHE] Settings cache MISS - fetching from Redis');
+
     try {
         const rawValue = await redis.get(SETTINGS_KEY);
         const settings = rawValue as ProxySettings | null;
@@ -592,13 +592,13 @@ export async function getModelConfigs(): Promise<Record<string, ModelConfig>> {
         const cached = modelConfigsCache.get(cacheKey);
         if (cached) {
             metrics.recordCacheHit(true);
-            console.log('[CACHE] Model configs cache HIT');
+
             return cached;
         }
 
         // Cache miss
         metrics.recordCacheHit(false);
-        console.log('[CACHE] Model configs cache MISS');
+
 
         const settings = await getSettings();
         const result = settings?.models || {};
@@ -685,13 +685,13 @@ export async function getBackupProfiles(): Promise<BackupProfile[]> {
         const cached = backupProfilesCache.get(cacheKey);
         if (cached) {
             metrics.recordCacheHit(true);
-            console.log('[CACHE] Backup profiles cache HIT');
+
             return cached;
         }
 
         // Cache miss
         metrics.recordCacheHit(false);
-        console.log('[CACHE] Backup profiles cache MISS');
+
 
         const profiles = await redis.get<BackupProfile[]>(BACKUP_PROFILES_KEY);
         const result = profiles || [];
@@ -813,13 +813,13 @@ export async function getAPIProfiles(): Promise<Record<string, APIProfile>> {
         const cached = apiProfilesCache.get(cacheKey) as any;
         if (cached) {
             metrics.recordCacheHit(true);
-            console.log('[CACHE] API profiles cache HIT');
+
             return cached;
         }
 
         // Cache miss - fetch from Redis
         metrics.recordCacheHit(false);
-        console.log('[CACHE] API profiles cache MISS - fetching from Redis');
+
 
         const profiles = await redis.get<Record<string, APIProfile>>(API_PROFILES_KEY);
         const result = profiles || {};
@@ -845,13 +845,13 @@ export async function getAPIProfile(profileId: string): Promise<APIProfile | nul
         const cached = apiProfilesCache.get(profileId);
         if (cached) {
             metrics.recordCacheHit(true);
-            console.log(`[CACHE] Profile ${profileId} cache HIT`);
+
             return cached;
         }
 
         // Cache miss - fetch from Redis
         metrics.recordCacheHit(false);
-        console.log(`[CACHE] Profile ${profileId} cache MISS`);
+
 
         const profiles = await getAPIProfiles();
         const profile = profiles[profileId] || null;

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Agent as HttpsAgent } from 'https';
-import { getKeyData, isExpired, getSettings, incrementUsage, checkUsageLimit, getAPIProfile, getBackupProfiles, incrementConcurrency, decrementConcurrency, validateKeyWithUsage } from '../lib/redis';
+import { getKeyData, isExpired, getSettings, incrementUsage, getAPIProfile, getBackupProfiles, incrementConcurrency, decrementConcurrency } from '../lib/redis';
 import { generateCorrelationId, setCorrelationId, logInfo, logError, createPerformanceTracker } from '../lib/logger';
 import { metrics } from '../lib/metrics';
 
@@ -12,7 +12,7 @@ import { metrics } from '../lib/metrics';
 const httpsAgent = new HttpsAgent({
     keepAlive: true,
     keepAliveMsecs: 30000,   // Keep idle connections alive for 30s
-    maxSockets: 100,          // Max concurrent connections per host (increased for cluster mode)
+    maxSockets: 50,           // Max concurrent connections per host (balanced for cluster mode)
     maxFreeSockets: 10,       // Keep 10 idle connections ready
     timeout: 60000,           // Socket timeout: 60s
 });
@@ -189,11 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             version: PROXY_VERSION,
         });
 
-        // Log client info for debugging
-        console.log('[PROXY] Client info:', {
-            ip: clientIP,
-            userAgent: userAgent.substring(0, 50) + '...'
-        });
+
 
         // ====================
         // 1. AUTHENTICATION
@@ -204,11 +200,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const userToken = authHeader.replace('Bearer ', '');
-        console.log('[PROXY] Using key:', userToken); // Full key for debugging
+
 
         const keyData = await getKeyData(userToken);
         if (!keyData) {
-            console.log('[PROXY] Key not found in Redis:', userToken);
+
             return res.status(401).json({ error: 'Invalid API key' });
         }
 
@@ -254,20 +250,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (lastMessage?.role === 'user') {
                 const content = lastMessage.content;
 
-                // DEBUG: Log content structure to understand why object is failing
-                console.log('[PROXY] Content structure debug:', {
-                    contentType: typeof content,
-                    isArray: Array.isArray(content),
-                    contentKeys: typeof content === 'object' && content !== null ? Object.keys(content) : 'N/A',
-                    hasType: content?.hasOwnProperty('type'),
-                    typeValue: content?.type,
-                    contentPreview: typeof content === 'string' ? content.substring(0, 100) :
-                        Array.isArray(content) ? `array[${content.length}]` :
-                            typeof content === 'object' ? JSON.stringify(content).substring(0, 200) : 'other',
-                    // NEW: Check array items
-                    arrayItemTypes: Array.isArray(content) ? content.map((item: any) => item?.type || 'no-type') : 'N/A',
-                    firstItemPreview: Array.isArray(content) && content[0] ? JSON.stringify(content[0]).substring(0, 150) : 'N/A'
-                });
+
 
                 // Check if content is a tool_result
                 // Content can be string (actual user message) or array of content blocks
@@ -290,36 +273,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
         }
 
-        console.log('[PROXY] Usage counting check:', {
-            endpoint: clientPath,
-            isCountTokens: isCountTokensEndpoint,
-            hasMessages: !!requestBody.messages,
-            messageCount: requestBody.messages?.length || 0,
-            lastRole: requestBody.messages?.[requestBody.messages?.length - 1]?.role || 'none',
-            lastContentType: typeof requestBody.messages?.[requestBody.messages?.length - 1]?.content,
-            shouldCountUsage: shouldCountUsage
-        });
-
         // Create conversation ID WITHOUT message hash
         // Claude Opus modifies message content dynamically (adds suggestions, logs, etc.)
         // causing hash-based detection to count same prompt multiple times
         // Solution: Rely on 60s time window + client fingerprint only
         let conversationId = `${clientIP}:${userAgent.substring(0, 50)}`;
 
-        console.log('[PROXY] Conversation ID (time-based):', {
-            conversationId: conversationId,
-            note: 'Message hash removed due to Claude Opus dynamic content modification'
-        });
-
-        // Check current usage (but don't increment yet)
-        const currentUsageCheck = await checkUsageLimit(userToken);
+        // Inline usage check — keyData already has usage_today from getKeyData() above
+        // Avoids a duplicate Redis GET that checkUsageLimit() would make (~20ms saved)
+        const currentUsageCheck = {
+            allowed: keyData.usage_today.count < keyData.daily_limit,
+            currentUsage: keyData.usage_today.count,
+            limit: keyData.daily_limit,
+        };
         if (!currentUsageCheck.allowed) {
-            console.error('[PROXY] BLOCKING REQUEST - Daily limit reached:', {
-                userToken: userToken.substring(0, 8) + '...',
-                clientIP,
-                usage: currentUsageCheck.currentUsage,
-                limit: currentUsageCheck.limit
-            });
             return res.status(429).json({
                 error: 'Daily limit reached',
                 message: `This key has reached its daily limit of ${currentUsageCheck.limit} requests. Please try again tomorrow.`,
@@ -336,10 +303,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const defaultApiKey = settings?.api_key || process.env.API_KEY_GOC;
         const defaultConcurrencyLimit = settings?.concurrency_limit || 100; // Default to 100 if not set
 
-        console.log('[PROXY] Settings loaded:', {
-            hasCustomUrl: !!settings?.api_url,
-            concurrencyLimit: defaultConcurrencyLimit
-        });
+
 
         // Determine if we are using a specific User Profile (overrides waterfall)
         let userSelectedProfileId = keyData.selected_api_profile_id;
@@ -376,9 +340,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     disableSystemPromptInjection: profile.disable_system_prompt_injection,
                     systemPromptFormat: profile.system_prompt_format
                 };
-                console.log(`[PROXY] Using User Selected Profile: ${profile.name}`);
+
             } else {
-                console.warn(`[PROXY] Selected profile ${userSelectedProfileId} not found/inactive. Reverting to Waterfall.`);
+
                 // Fall through to Strategy B
             }
         }
@@ -390,7 +354,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (defaultApiKey) {
                 const numericLimit = Number(defaultConcurrencyLimit) || 100;
                 const check = await incrementConcurrency('default', numericLimit);
-                console.log(`[PROXY] Waterfall Step 1: Default check - Current: ${check.current}, Limit: ${numericLimit}, Allowed: ${check.allowed}`);
+
 
                 if (check.allowed) {
                     activeSource = {
@@ -403,27 +367,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         systemPromptFormat: settings?.system_prompt_format
                     };
                     concurrencyIdToDecrement = 'default';
-                    console.log(`[PROXY] ✅ Using DEFAULT API`);
+
                 } else {
-                    console.log(`[PROXY] ❌ Default API full, trying backups...`);
+
                 }
             }
 
             // 2. Try Backups if Default failed or wasn't configured
             if (!activeSource) {
                 const backups = await getBackupProfiles();
-                console.log(`[PROXY] Waterfall Step 2: Found ${backups.length} backup profile(s)`);
+
 
                 for (const backup of backups) {
-                    console.log(`[PROXY] Checking backup: ${backup.name}, Active: ${backup.is_active}, Limit: ${backup.concurrency_limit}`);
                     if (!backup.is_active) {
-                        console.log(`[PROXY] ⏭️ Skipping ${backup.name} (inactive)`);
                         continue;
                     }
 
                     const limit = Number(backup.concurrency_limit) || 10;
                     const check = await incrementConcurrency(backup.id, limit);
-                    console.log(`[PROXY] Backup ${backup.name} - Current: ${check.current}, Limit: ${limit}, Allowed: ${check.allowed}`);
+
 
                     if (check.allowed) {
                         activeSource = {
@@ -435,17 +397,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             name: `Backup: ${backup.name}`
                         };
                         concurrencyIdToDecrement = backup.id;
-                        console.log(`[PROXY] ✅ Using BACKUP: ${backup.name}`);
+
                         break; // Found a source, stop looking
                     } else {
-                        console.log(`[PROXY] ❌ Backup ${backup.name} full`);
+
                     }
                 }
             }
 
             // 3. Fallback to Default API even if at capacity (allow queueing)
             if (!activeSource && defaultApiKey) {
-                console.log(`[PROXY] Waterfall Step 3: All sources exhausted, falling back to DEFAULT (will queue)`);
+
                 activeSource = {
                     id: 'default',
                     type: 'default',
@@ -474,10 +436,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const apiKey = activeSource.apiKey;
         const profileModelActual = activeSource.modelActual;
 
-        console.log(`[PROXY] Final Source: ${activeSource.name}`);
-
         const apiUrl = buildUpstreamUrl(apiBase, clientPath, clientQuery);
-        console.log('[PROXY] Final upstream URL:', apiUrl);
 
 
         // ====================
@@ -505,7 +464,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // Transform to actual model for upstream
         requestBody.model = modelActual;
-        console.log('[PROXY] Model transformed to:', modelActual);
+
 
         // ====================
         // 7. SYSTEM PROMPT INJECTION
@@ -524,25 +483,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             systemPromptSource = systemPrompt ? `model:${keySelectedModel}` : systemPromptSource;
         }
 
-        console.log('[PROXY] [SYSPROMPT] Source resolution:', {
-            source: systemPromptSource,
-            selectedModel: keySelectedModel || '(none)',
-            hasGlobalPrompt: !!settings?.system_prompt,
-            hasModelPrompt: !!(keySelectedModel && settings?.models?.[keySelectedModel]?.system_prompt),
-            availableModelConfigs: settings?.models ? Object.keys(settings.models) : [],
-            rawLength: systemPrompt ? String(systemPrompt).length : 0
-        });
+
 
         // ... (Existing System Prompt Injection Checks) ...
         if (systemPrompt && typeof systemPrompt === 'string') {
             systemPrompt = systemPrompt.trim();
             if (!systemPrompt) {
-                console.log('[PROXY] [SYSPROMPT] Prompt was whitespace-only, discarded');
+
                 systemPrompt = undefined;
             } else {
                 const MAX_SYSTEM_PROMPT_LENGTH = 10000;
                 if (systemPrompt.length > MAX_SYSTEM_PROMPT_LENGTH) {
-                    console.log(`[PROXY] [SYSPROMPT] Truncated: ${systemPrompt.length} → ${MAX_SYSTEM_PROMPT_LENGTH} chars`);
+
                     systemPrompt = systemPrompt.substring(0, MAX_SYSTEM_PROMPT_LENGTH);
                 }
             }
@@ -551,25 +503,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Check if we should bypass system prompt injection
         const shouldBypassSystemPrompt = activeSource.disableSystemPromptInjection;
 
-        console.log('[PROXY] [SYSPROMPT] Bypass check:', {
-            shouldBypass: shouldBypassSystemPrompt,
-            reason: shouldBypassSystemPrompt
-                ? 'profile.disable_system_prompt_injection=true'
-                : 'N/A',
-            apiBase,
-            profileId: activeSource.id,
-            profileName: activeSource.name
-        });
 
-        if (shouldBypassSystemPrompt) {
-            console.log('[PROXY] [SYSPROMPT] ✅ Bypassed — no injection performed');
-        }
 
         if (systemPrompt && !shouldBypassSystemPrompt) {
             const formatSetting = activeSource.systemPromptFormat || 'auto';
 
             if (formatSetting === 'disabled') {
-                console.log('[PROXY] [SYSPROMPT] ⏭️ Skipped — format set to disabled');
+
             } else {
                 const autoDetectedAnthropic = 'system' in requestBody || clientPath.includes('/messages');
                 const existingSystemInMessages = requestBody.messages?.some?.((msg: any) => msg.role === 'system');
@@ -679,37 +619,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     injectionMethods.push('none:no_target');
                 }
 
-                console.log('[PROXY] [SYSPROMPT] ✅ Injected:', {
-                    format: formatSetting,
-                    methods: injectionMethods,
-                    source: systemPromptSource,
-                    promptLength: systemPrompt.length,
-                    promptPreview: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
-                    clientPath,
-                    autoDetectedAnthropic,
-                    hadExistingSystemMsg: !!existingSystemInMessages
-                });
+
             } // end else (formatSetting !== 'disabled')
         } else if (!systemPrompt) {
-            console.log('[PROXY] [SYSPROMPT] ⏭️ No system prompt configured — skipping injection');
+
         }
 
 
         // ====================
         // 8. EXECUTE REQUEST
         // ====================
-        console.log('[PROXY] Forwarding request:', {
-            method: 'POST',
-            url: apiUrl,
-            hasAuth: !!apiKey,
-            stream: requestBody.stream
-        });
+
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => {
-            console.log('[PROXY] Request timeout - aborting');
-            controller.abort();
-        }, 300000); // 5 minutes to match server timeout
+        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
 
         let response: Response | undefined;
 
@@ -736,7 +659,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         const fetchBody = JSON.stringify(requestBody);
         const MAX_FETCH_RETRIES = 3;
-        const MAX_TRAFFIC_RETRIES = 60; // Keep retrying "Traffic high" for up to ~2 minutes
+        const MAX_TRAFFIC_RETRIES = 15; // Keep retrying "Traffic high" for up to ~30 seconds
         const TRAFFIC_RETRY_DELAY_MS = 2000; // 2s between traffic retries
         const RETRYABLE_STATUS_CODES = new Set([500, 502, 503, 504]);
 
@@ -991,7 +914,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         if (requestBody.stream) {
             // ... (Stream logic) ...
-            console.log('[PROXY] Starting stream');
+
             debugLog('Stream mode: true, upstream status:', response.status);
             res.setHeader('Content-Type', 'text/event-stream');
             res.setHeader('Cache-Control', 'no-cache');
@@ -1004,7 +927,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let usageIncremented = false;
             const safeDecrement = async (reason: string) => {
                 if (concurrencyIdToDecrement) {
-                    console.log(`[PROXY] Releasing concurrency for ${concurrencyIdToDecrement} (Reason: ${reason})`);
+
                     const id = concurrencyIdToDecrement;
                     concurrencyIdToDecrement = null; // Prevent double decrement
                     await decrementConcurrency(id);
@@ -1015,14 +938,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const safeIncrementUsage = async () => {
                 if (shouldCountUsage && !usageIncremented) {
                     usageIncremented = true;
-                    const usageResult = await incrementUsage(userToken, conversationId);
-                    console.log('[PROXY] Usage incremented after successful response:', {
-                        userToken: userToken.substring(0, 8) + '...',
-                        usage: usageResult.currentUsage,
-                        limit: usageResult.limit,
-                        shouldIncrement: usageResult.shouldIncrement,
-                        conversationId: conversationId.substring(0, 8) + '...'
-                    });
+                    await incrementUsage(userToken, conversationId);
                 }
             };
 
@@ -1032,7 +948,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 if (!res.writableEnded) {
                     try {
                         res.write(':heartbeat\n\n');
-                        console.log('[PROXY] Sent heartbeat to keep connection alive');
+
                     } catch (e) {
                         console.error('[PROXY] Failed to send heartbeat:', e);
                         clearInterval(heartbeatInterval);
@@ -1081,15 +997,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                         debugLog('✅ Stream complete:', { chunks: streamChunkCount, totalBytes: streamTotalBytes, durationMs: Date.now() - streamStartTime });
 
                         // Log token usage from stream
-                        if (streamTokenUsage.input_tokens || streamTokenUsage.output_tokens) {
-                            console.log('[PROXY] Token usage (stream):', {
-                                key: userToken.substring(0, 8) + '...',
-                                input_tokens: streamTokenUsage.input_tokens || 0,
-                                output_tokens: streamTokenUsage.output_tokens || 0,
-                                total_tokens: (streamTokenUsage.input_tokens || 0) + (streamTokenUsage.output_tokens || 0),
-                                source: activeSource!.name
-                            });
-                        }
+
 
                         // Increment usage after successful stream
                         await safeIncrementUsage();
@@ -1149,10 +1057,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     // =====================
                     // DEBUG: Log raw chunk BEFORE rewrite (only for tool_call related chunks)
                     // =====================
-                    const hasToolCallBefore = /tool_use|tool_call|call_function|minimax/i.test(chunk);
-                    if (hasToolCallBefore) {
-                        console.log('[PROXY] [DEBUG-TOOLCALL] RAW chunk (before rewrite):', chunk.substring(0, 500));
-                    }
+
 
                     // Rewrite model names in SSE chunks (handles Anthropic and OpenAI formats)
                     if (modelDisplay && modelActual) {
@@ -1191,18 +1096,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     chunk = chunk.replace(/,?"output_sensitive_type":\d+/g, '');
                     chunk = chunk.replace(/,?"output_sensitive_int":\d+/g, '');
 
-                    // =====================
-                    // DEBUG: Log chunk AFTER rewrite (only for tool_call related chunks)
-                    // =====================
-                    if (hasToolCallBefore) {
-                        const stillHasMinimax = /minimax|call_function/i.test(chunk);
-                        console.log('[PROXY] [DEBUG-TOOLCALL] REWRITTEN chunk (after rewrite):', chunk.substring(0, 500));
-                        if (stillHasMinimax) {
-                            console.error('[PROXY] [DEBUG-TOOLCALL] ⚠️ WARNING: Minimax trace still found after rewrite!');
-                        } else {
-                            console.log('[PROXY] [DEBUG-TOOLCALL] ✅ Clean - no minimax traces');
-                        }
-                    }
+
 
                     res.write(chunk);
                 }
@@ -1242,25 +1136,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (data.usage) {
                 const inputTokens = data.usage.input_tokens || data.usage.prompt_tokens || 0;
                 const outputTokens = data.usage.output_tokens || data.usage.completion_tokens || 0;
-                console.log('[PROXY] Token usage (non-stream):', {
-                    key: userToken.substring(0, 8) + '...',
-                    input_tokens: inputTokens,
-                    output_tokens: outputTokens,
-                    total_tokens: inputTokens + outputTokens,
-                    source: activeSource!.name
-                });
             }
 
             // Increment usage after successful non-stream response
             if (shouldCountUsage) {
-                const usageResult = await incrementUsage(userToken, conversationId);
-                console.log('[PROXY] Usage incremented after successful response:', {
-                    userToken: userToken.substring(0, 8) + '...',
-                    usage: usageResult.currentUsage,
-                    limit: usageResult.limit,
-                    shouldIncrement: usageResult.shouldIncrement,
-                    conversationId: conversationId.substring(0, 8) + '...'
-                });
+                await incrementUsage(userToken, conversationId);
             }
 
             // Track successful non-streaming request
