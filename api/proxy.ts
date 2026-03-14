@@ -14,7 +14,7 @@ const httpsAgent = new HttpsAgent({
     keepAliveMsecs: 30000,   // Keep idle connections alive for 30s
     maxSockets: 50,           // Max concurrent connections per host (balanced for cluster mode)
     maxFreeSockets: 10,       // Keep 10 idle connections ready
-    timeout: 60000,           // Socket timeout: 60s
+    timeout: 300000,          // Socket timeout: 300s (match server/nginx, prevents kill during long AI thinking)
 });
 
 // Default API base URL - match CloudFlare Worker targetBase
